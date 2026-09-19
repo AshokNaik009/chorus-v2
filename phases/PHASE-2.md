@@ -27,7 +27,7 @@ packages/
     src/cell.ts           # Cell: char, fg, bg, attrs (bold/dim/italic/underline/reverse)
     src/buffer.ts         # 2D cell grid; get/set/fill/resize
     src/rect.ts           # Rect, split horizontal/vertical, constraints
-    src/layout.ts         # layout tree -> Rect per pane (port ../herdr/src/layout.rs)
+    src/layout.ts         # layout tree -> Rect per pane (port /Users/ashoknaik/claude-experiments/herdr/src/layout.rs)
     src/widgets/block.ts  # borders + title
     src/widgets/text.ts   # wrapped paragraph, spans with style
     src/widgets/clear.ts

@@ -18,18 +18,18 @@ Port from herdr. These are the files, with measured sizes:
 
 | herdr file | Lines | What |
 |---|---|---|
-| `../herdr/src/raw_input.rs` | 2,748 | Byte framer, paste/mouse disambiguation |
-| `../herdr/src/input/parse.rs` | 1,161 | CSI/SS3 sequence parsing |
-| `../herdr/src/input/encode.rs` | 1,256 | Key -> bytes for the pane |
-| `../herdr/src/input/model.rs` | 557 | Key/modifier model, protocol flags |
-| `../herdr/src/input/mouse.rs` | 258 | Mouse event model |
-| `../herdr/src/input/keybindings.rs` | 298 | Binding table |
-| `../herdr/src/input/lease.rs` | 452 | Input routing/ownership |
+| `/Users/ashoknaik/claude-experiments/herdr/src/raw_input.rs` | 2,748 | Byte framer, paste/mouse disambiguation |
+| `/Users/ashoknaik/claude-experiments/herdr/src/input/parse.rs` | 1,161 | CSI/SS3 sequence parsing |
+| `/Users/ashoknaik/claude-experiments/herdr/src/input/encode.rs` | 1,256 | Key -> bytes for the pane |
+| `/Users/ashoknaik/claude-experiments/herdr/src/input/model.rs` | 557 | Key/modifier model, protocol flags |
+| `/Users/ashoknaik/claude-experiments/herdr/src/input/mouse.rs` | 258 | Mouse event model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/input/keybindings.rs` | 298 | Binding table |
+| `/Users/ashoknaik/claude-experiments/herdr/src/input/lease.rs` | 452 | Input routing/ownership |
 
 **Their `#[cfg(test)] mod tests` blocks are the specification.** Transliterate
 the test vectors first, then write the implementation against them. There are
 also fixture corpora worth converting:
-`../herdr/tests/fixtures/keyboard_protocol_corpus.tsv`,
+`/Users/ashoknaik/claude-experiments/herdr/tests/fixtures/keyboard_protocol_corpus.tsv`,
 `linux_terminal_variants.tsv`, `macos_terminal_variants.tsv`.
 
 ## Deliverables
@@ -66,7 +66,7 @@ for each; read the surrounding comments before porting.
 - **Protocol negotiation.** Kitty keyboard, modifyOtherKeys, and legacy encodings
   produce different bytes for the same keypress. The pane's active mode decides.
   Note: herdr patched libghostty-vt specifically to expose modifyOtherKeys mode
-  as a scalar (`../herdr/vendor/libghostty-vt.patches.md`, patch 0002) — check
+  as a scalar (`/Users/ashoknaik/claude-experiments/herdr/vendor/libghostty-vt.patches.md`, patch 0002) — check
   whether `@xterm/headless` exposes this, and if not, how to track it.
 
 ## Acceptance criteria

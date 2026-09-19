@@ -6,12 +6,21 @@ Rewrite of `herdr` (Rust, Apache-2.0), using the runtime architecture proven by
 
 **Read this file first in any new session.** Then read the current phase doc.
 
+## Where this lives
+
+This repo sits at `/Users/ashoknaik/claude-experiments/herdr/herdr-ts`, inside the
+herdr checkout, but it is **its own git repository** with its own history. The
+outer herdr repo does not track its contents — it sees only an untracked
+directory. Do not commit herdr-ts changes to the herdr repo, and do not let
+herdr's `CLAUDE.md` maintainer/release rules govern work here; they apply to
+herdr, not to this project.
+
 ## Reference checkouts
 
 | What | Path | License | Use it for |
 |---|---|---|---|
-| herdr | `../herdr` | Apache-2.0 | Product logic, layout tree, input parsing, detection manifests |
-| orca | `../orca` | MIT | Runtime architecture: daemon, PTY ownership, process table, ssh2 |
+| herdr | `/Users/ashoknaik/claude-experiments/herdr` | Apache-2.0 | Product logic, layout tree, input parsing, detection manifests |
+| orca | `/Users/ashoknaik/claude-experiments/orca` | MIT | Runtime architecture: daemon, PTY ownership, process table, ssh2 |
 
 Both are permissively licensed. Derive freely; keep attribution in `NOTICE`.
 
@@ -30,7 +39,7 @@ Two long-lived processes. A **daemon** owns every PTY and the terminal state
 client** attaches, receives cell snapshots, renders them, and sends input. The
 client can die, update, and reattach; the daemon and its PTYs survive. This is
 Orca's `orcad` + terminal-daemon split, documented in
-`../orca/docs/reference/orcad-operations.md`.
+`/Users/ashoknaik/claude-experiments/orca/docs/reference/orcad-operations.md`.
 
 This split is load-bearing. It is what makes live updates possible without
 passing file descriptors over unix sockets, and it is what removes the entire
@@ -42,7 +51,7 @@ shared-mutex concurrency model that has no TypeScript equivalent.
 |---|---|
 | `@xterm/headless` for VT emulation, not libghostty-vt | Removes 355k lines of vendored Zig and a 201-function FFI surface. Orca runs this in production. |
 | Detached versioned daemon, not `SCM_RIGHTS` fd passing | Node has no `sendmsg` control-message API. Orca solves it by never killing the PTY owner. |
-| TTL-cached `ps` table, not `pgrep` per pane | See `../orca/src/relay/pty-child-process-inspection.ts`. `pgrep -P` is ~4k file opens per call. |
+| TTL-cached `ps` table, not `pgrep` per pane | See `/Users/ashoknaik/claude-experiments/orca/src/relay/pty-child-process-inspection.ts`. `pgrep -P` is ~4k file opens per call. |
 | JSON-RPC, not bincode | No deployed clients to stay compatible with. bincode 2 varint has no TS implementation. |
 | Own cell-buffer renderer, not Ink/OpenTUI | Ink caps ~30fps and re-renders on every state change. herdr uses only 20 ratatui imports; this layer is small. |
 | No kitty graphics in v1 | 2,834 lines in herdr against a Ghostty-specific API. No TS path. Revisit later. |

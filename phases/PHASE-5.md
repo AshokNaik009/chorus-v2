@@ -15,8 +15,8 @@ input, or done, and the UI shows it.
 
 **Take herdr's design, Orca's mechanics.**
 
-herdr's detection engine (`../herdr/src/detect/`, 4,504 lines) is manifest-driven:
-TOML files per agent in `../herdr/src/detect/manifests/` (claude, codex, cursor,
+herdr's detection engine (`/Users/ashoknaik/claude-experiments/herdr/src/detect/`, 4,504 lines) is manifest-driven:
+TOML files per agent in `/Users/ashoknaik/claude-experiments/herdr/src/detect/manifests/` (claude, codex, cursor,
 gemini, amp, cline, devin, droid, copilot, antigravity...) with explicit AND/OR/NOT
 gates over screen regions. That design is good and portable — keep it.
 
@@ -25,10 +25,10 @@ inspection. Use Orca's mechanics instead:
 
 | Need | Orca source |
 |---|---|
-| Foreground process name | `../orca/src/relay/pty-shell-utils.ts` |
-| Does the shell have children | `../orca/src/relay/pty-child-process-inspection.ts` |
-| Shared process table | `../orca/src/shared/process-table-index.ts`, `process-table-snapshot-reader.ts` |
-| cwd / title from OSC | `../orca/src/main/daemon/terminal-osc-cwd-title-scanner.ts` |
+| Foreground process name | `/Users/ashoknaik/claude-experiments/orca/src/relay/pty-shell-utils.ts` |
+| Does the shell have children | `/Users/ashoknaik/claude-experiments/orca/src/relay/pty-child-process-inspection.ts` |
+| Shared process table | `/Users/ashoknaik/claude-experiments/orca/src/shared/process-table-index.ts`, `process-table-snapshot-reader.ts` |
+| cwd / title from OSC | `/Users/ashoknaik/claude-experiments/orca/src/main/daemon/terminal-osc-cwd-title-scanner.ts` |
 
 **The performance rule, stated once:** detection runs per pane on a poll. Use
 ONE TTL-cached `ps` snapshot with a memoized parent/child index, shared across
@@ -46,7 +46,7 @@ fallback, not the reverse.
 
 - `worktree.create/list/open/remove` — take from Orca, which has a mature
   worktree lifecycle (`git worktree` per agent, branch isolation).
-- `integration.install/list` — take from herdr (`../herdr/src/integration/`,
+- `integration.install/list` — take from herdr (`/Users/ashoknaik/claude-experiments/herdr/src/integration/`,
   11,182 lines): installs agent hooks, with version markers and migration.
   Note herdr's rule: integration asset versions are migration versions relative
   to the last release, not per-commit counters.
@@ -57,7 +57,7 @@ fallback, not the reverse.
   `--compile` — native addon support is its known weak spot, and we depend on
   node-pty.
 - Ship: platform tarballs carrying the app plus prebuilt node-pty binaries for
-  the target. See `../orca/config/scripts/build-orcad-prebuilds.mjs`.
+  the target. See `/Users/ashoknaik/claude-experiments/orca/config/scripts/build-orcad-prebuilds.mjs`.
 - Targets for v1: macOS arm64, macOS x64, Linux x64, Linux arm64.
   **Windows is explicitly deferred** — it is 8,400+ lines in herdr
   (`platform/windows.rs` 4,490 + `client/input/windows_vti.rs` 3,908), plus

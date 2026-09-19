@@ -15,16 +15,16 @@ part of herdr that ports most directly.
 
 | herdr file | Lines | What |
 |---|---|---|
-| `../herdr/src/app/state.rs` + `app/` | ~18,300 | AppState, actions, runtime |
-| `../herdr/src/layout.rs` | ~1,100 | Layout tree, splits, ratios |
-| `../herdr/src/workspace/` | 4,064 | Workspace model |
-| `../herdr/src/session.rs` | ~1,000 | Session model |
-| `../herdr/src/persist/` | 1,902 | Save/restore |
-| `../herdr/src/config/` | 5,092 | TOML/JSONC config, reload |
-| `../herdr/src/selection.rs` | ~600 | Selection model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/app/state.rs` + `app/` | ~18,300 | AppState, actions, runtime |
+| `/Users/ashoknaik/claude-experiments/herdr/src/layout.rs` | ~1,100 | Layout tree, splits, ratios |
+| `/Users/ashoknaik/claude-experiments/herdr/src/workspace/` | 4,064 | Workspace model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/session.rs` | ~1,000 | Session model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/persist/` | 1,902 | Save/restore |
+| `/Users/ashoknaik/claude-experiments/herdr/src/config/` | 5,092 | TOML/JSONC config, reload |
+| `/Users/ashoknaik/claude-experiments/herdr/src/selection.rs` | ~600 | Selection model |
 
 **The API surface is frozen and enumerable.** herdr has exactly 38 endpoint
-methods in `../herdr/tests/fixtures/endpoint-method-shapes-v1.json`. Use that
+methods in `/Users/ashoknaik/claude-experiments/herdr/tests/fixtures/endpoint-method-shapes-v1.json`. Use that
 file as the checklist. We are not wire-compatible (we use JSON-RPC, not bincode)
 but the *method set* is the right feature target.
 
@@ -72,7 +72,7 @@ packages/
 **`core` must have zero runtime dependencies.** This is the single most
 important structural rule of the phase. It is what makes the state layer
 testable without PTYs, sockets, or a terminal — and it is exactly how both
-reference projects keep their logic honest (`../orca/packages/core` equivalent,
+reference projects keep their logic honest (Orca keeps its host-agnostic logic in `/Users/ashoknaik/claude-experiments/orca/src/shared/`,
 and herdr's `AppState::test_new()`).
 
 **Port herdr's invariant checks.** `AppState::assert_invariants_for_test()` and

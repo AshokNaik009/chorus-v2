@@ -10,7 +10,7 @@ Two claims make or break this project:
 2. A detached daemon can keep PTYs alive across a client restart, so live updates
    do not need `SCM_RIGHTS` file-descriptor passing (which Node cannot do).
 
-Both are proven in `../orca`. Neither is proven *for us*. Prove them in ~3-5k
+Both are proven in `/Users/ashoknaik/claude-experiments/orca`. Neither is proven *for us*. Prove them in ~3-5k
 lines before committing to 45k.
 
 ## Goal
@@ -45,7 +45,7 @@ packages/
 ## Critical implementation notes
 
 **`@xterm/headless` needs a `window` global** when run under plain Node.
-See `../orca/src/main/daemon/xterm-env-polyfill.ts` — import the polyfill
+See `/Users/ashoknaik/claude-experiments/orca/src/main/daemon/xterm-env-polyfill.ts` — import the polyfill
 *before* any `@xterm/headless` import.
 
 **Bytes, not strings.** `PtyBackend.onData` must carry `Uint8Array`, not
@@ -57,7 +57,7 @@ socket. See node-pty's `handleFlowControl`.
 
 **Socket path carries the protocol version** (`daemon-v<N>.sock`). This is how
 a new client finds a compatible daemon, and how an old daemon keeps serving old
-clients. Read `../orca/docs/reference/orcad-operations.md` "Two long-lived
+clients. Read `/Users/ashoknaik/claude-experiments/orca/docs/reference/orcad-operations.md` "Two long-lived
 processes" before writing `adopt.ts`.
 
 **Detachment is not service isolation.** Under systemd, `KillMode=mixed` will
