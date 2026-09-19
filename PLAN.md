@@ -24,6 +24,16 @@ herdr, not to this project.
 
 Both are permissively licensed. Derive freely; keep attribution in `NOTICE`.
 
+Every line count and file path quoted in these phase docs was checked against
+these two checkouts on **2026-09-19**, at herdr `3f2a6e74`
+(`preview-2026-09-16-2c29fb29e302-20-g3f2a6e74`) and orca `061a756b84`. Both
+move. Re-measure before you trust a number; do not re-copy one.
+
+Apache-2.0 requires retaining herdr's license text and any attribution notices
+in derived files — herdr ships no `NOTICE`, so reproducing `LICENSE` plus a
+per-file provenance line is enough. MIT requires orca's copyright notice
+(Lovecast Inc., 2026).
+
 ## What we are building
 
 A TUI you run in a terminal (and over SSH) that runs many coding agents in
@@ -49,12 +59,13 @@ shared-mutex concurrency model that has no TypeScript equivalent.
 
 | Decision | Why |
 |---|---|
-| `@xterm/headless` for VT emulation, not libghostty-vt | Removes 355k lines of vendored Zig and a 201-function FFI surface. Orca runs this in production. |
+| `@xterm/headless` for VT emulation, not libghostty-vt | Removes a vendored Zig tree and a large FFI surface (`src/ghostty/bindings.rs` alone is 5,284 lines). Orca runs `@xterm/headless` in production. Pin **6.0.0** — latest stable, 2025-12-22; orca is on the `6.1.0-beta.x` train. |
 | Detached versioned daemon, not `SCM_RIGHTS` fd passing | Node has no `sendmsg` control-message API. Orca solves it by never killing the PTY owner. |
 | TTL-cached `ps` table, not `pgrep` per pane | See `/Users/ashoknaik/claude-experiments/orca/src/relay/pty-child-process-inspection.ts`. `pgrep -P` is ~4k file opens per call. |
-| JSON-RPC, not bincode | No deployed clients to stay compatible with. bincode 2 varint has no TS implementation. |
-| Own cell-buffer renderer, not Ink/OpenTUI | Ink caps ~30fps and re-renders on every state change. herdr uses only 20 ratatui imports; this layer is small. |
-| No kitty graphics in v1 | 2,834 lines in herdr against a Ghostty-specific API. No TS path. Revisit later. |
+| JSON-RPC, not bincode | No deployed clients to stay compatible with (herdr's `PROTOCOL_VERSION` is 22; ours starts at 1). The only TS bincode codec on npm is `bincode-ts` — 3 versions, last published 2025-07-17, ~1.7k downloads/month. It exists; it is not something to bet a wire format on. |
+| Own cell-buffer renderer, not Ink/OpenTUI | Ink's refresh rate is locked to 30fps and it rebuilds the whole output on every state change. herdr's entire ratatui surface is **24 unique identifiers**; this layer is small. See PHASE-2 for the full list and the OpenTUI numbers. |
+| No kitty graphics in v1 | `src/kitty_graphics.rs` is 1,509 lines, plus call sites in ~20 other files, all against Ghostty's API. No TS path. Revisit later. |
+| Node 24, not Node 20 | Node 20 reached EOL on **2026-04-30**. Node 24 is Active LTS, 22 is Maintenance LTS, 26 is Current. Pin `engines.node: "24"` (orca does) and set the floor at 22. |
 
 ## Phases
 
@@ -69,7 +80,10 @@ committed, verified code and a `HANDOFF.md` the next session reads.
 | 4 | Session model + API | It is a multiplexer | 4-6 wk |
 | 5 | Agents + detection + packaging | It is *this* multiplexer | 3-4 wk |
 
-Realistic total: **4-5 months focused**, ~45k lines TS.
+Realistic total: **4-5 months focused**, ~45k lines TS — but see PHASE-4: the
+herdr subsystems it ports measure ~55k lines of Rust, not the ~32k an earlier
+draft of that table claimed, so the 15k budget for `core/` is the softest
+number in this plan.
 Remote SSH attach is deliberately **phase 6**, not squeezed into 5.
 
 Phases 1 and 2 carry all the architectural risk. If they succeed, the rest is

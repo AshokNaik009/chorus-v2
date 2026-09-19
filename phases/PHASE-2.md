@@ -44,22 +44,44 @@ bench/
 
 ## Why not Ink / OpenTUI / blessed
 
-Measured on herdr: it uses **20 unique ratatui imports** and renders headless
-into a cell buffer. Buffer, Cell, Rect, Style, Color, Modifier, Line, Span,
-Block, Borders, Paragraph, Wrap, Clear, Widget, Direction. That is the whole
-surface. Writing it directly is ~4k lines and gives full control of the diff.
+Measured on herdr at `3f2a6e74`: every `use ratatui::...` in the tree resolves
+to **24 unique identifiers**, and it renders headless into a cell buffer.
 
-Ink caps at ~30fps and re-renders the visible terminal on every state change —
-300 lines/sec of agent output becomes 300 React renders. OpenTUI is better but
-has a Zig core and prefers Bun, which trades one native dependency for another.
+```
+Backend  Block  Borders  Buffer  Clear  ClearType  Color  Constraint
+Direction  Frame  Layout  Line  Modifier  Paragraph  Position  Rect
+Size  Span  Style  Terminal  TestBackend  Widget  WindowSize  Wrap
+```
+
+That is the whole surface. Note `Cell` is *not* in it — herdr goes through
+`Buffer`'s accessors. Writing this layer directly is ~4k lines and gives full
+control of the diff.
+
+**Ink**: the refresh rate is locked to 30fps, and each React state change walks
+the whole node tree, builds a full 2D buffer, and writes a complete repaint.
+That is deliberate — correctness and no partial updates — but it means 300
+lines/sec of agent output becomes 300 full-tree renders
+([ink#657](https://github.com/vadimdemedes/ink/discussions/657)).
+
+**OpenTUI**: `@opentui/core` is at **0.5.11** (2026-09-07) — pre-1.0, with a
+native Zig core, a `bun-ffi-structs` dependency, and
+`engines: { bun: ">=1.3.0", node: ">=26.4.0" }`. Node 26 is Current, not LTS,
+so adopting it would drag our runtime floor above every LTS line *and* trade
+node-pty's native dependency for a second one. Revisit after it hits 1.0.
 
 **Use synchronized output (DEC mode 2026)** — wrap each frame in `CSI ? 2026 h`
-/ `CSI ? 2026 l`. This eliminates tearing on terminals that support it and is
-ignored harmlessly elsewhere.
+/ `CSI ? 2026 l`. This eliminates tearing where it is supported. Do not assume
+it is silently ignored elsewhere: **query it first** with DECRQM
+`CSI ? 2026 $ p`. No reply, or a reply of `CSI ? 2026 ; 0 $ y`, means
+unsupported — then don't emit the brackets at all. A terminal that neither
+implements the mode nor ignores it cleanly will otherwise print garbage into
+the user's scrollback on every frame.
 
 ## The benchmark (this is the deliverable that matters)
 
-`bench/render-scale.ts` must measure, at fixed geometry:
+`bench/render-scale.ts` must measure at **fixed, stated geometry** — pin it to
+a 200x50 outer terminal and record the per-pane cell dimensions the layout
+produced, so a later run is comparable:
 
 | Scenario | Panes | Output |
 |---|---|---|
@@ -68,6 +90,16 @@ ignored harmlessly elsewhere.
 | Stress | 15 | all panes running `yes`, hidden + visible |
 
 Record: frame time p50/p99, CPU%, RSS, daemon→client bytes/sec.
+
+**A floor you can already assume.** Extracting a full 200x50 grid out of
+`@xterm/headless` 6.0.0 — `getLine` + `getCell` + `getChars`/`getFgColor`/
+`getBgColor`/`isBold` on all 10,000 cells, reusing one cell object via
+`buffer.getNullCell()` — measured **0.153 ms** on the dev machine (Node 22,
+2026-09-19). So the snapshot-extraction half of 15 panes of that size is ~2.3ms
+of the 16ms budget *before* diff, ANSI encoding, or socket I/O. If your numbers
+land far above that, the cost is in your code, not in xterm; profile before
+blaming the emulator. Reuse the `getNullCell()` object — allocating a cell per
+read is the easiest way to lose this margin.
 
 **Compare hidden vs visible panes.** herdr's rule: hidden panes still parse PTY
 output, but must not trigger presentation work. If a hidden pane costs the same
@@ -85,10 +117,14 @@ Write results to `bench/RESULTS.md`. This file is the phase's real output.
 4. Terminal resize (SIGWINCH) reflows panes without corruption.
 5. Frame diff writes strictly fewer bytes than a full repaint, proven by a test.
 6. `bench/RESULTS.md` exists with all three scenarios measured.
-7. **15-pane p99 frame time under 16ms** on the dev machine. If it is not, stop
-   and write up why in `HANDOFF.md` — that is a legitimate phase outcome and the
+7. **15-pane p99 frame time under 16ms** at the stated geometry, on the dev
+   machine, with the machine and Node version recorded. If it is not, stop and
+   write up why in `HANDOFF.md` — that is a legitimate phase outcome and the
    project decision point.
 8. Hidden panes measurably cheaper than visible ones.
+9. DEC 2026 is gated on a DECRQM probe: a terminal that does not advertise it
+   receives no `CSI ? 2026` bytes at all. Test the probe parser against both a
+   `0`/absent reply and a `1`/`2` reply.
 
 ## Do NOT do in this phase
 

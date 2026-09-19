@@ -26,11 +26,18 @@ Port from herdr. These are the files, with measured sizes:
 | `/Users/ashoknaik/claude-experiments/herdr/src/input/keybindings.rs` | 298 | Binding table |
 | `/Users/ashoknaik/claude-experiments/herdr/src/input/lease.rs` | 452 | Input routing/ownership |
 
+All seven line counts above were re-checked on 2026-09-19 and are exact.
+
 **Their `#[cfg(test)] mod tests` blocks are the specification.** Transliterate
-the test vectors first, then write the implementation against them. There are
-also fixture corpora worth converting:
-`/Users/ashoknaik/claude-experiments/herdr/tests/fixtures/keyboard_protocol_corpus.tsv`,
-`linux_terminal_variants.tsv`, `macos_terminal_variants.tsv`.
+the test vectors first, then write the implementation against them.
+
+The fixture files are worth converting too, but size your expectations: they
+are small tables, not corpora —
+`/Users/ashoknaik/claude-experiments/herdr/tests/fixtures/keyboard_protocol_corpus.tsv`
+is 40 lines, `linux_terminal_variants.tsv` 22, `macos_terminal_variants.tsv` 18.
+The ~1,500 lines of inline Rust test cases across `raw_input.rs`, `parse.rs`,
+and `encode.rs` are the real specification; the TSVs are a cross-terminal
+sanity check on top.
 
 ## Deliverables
 
@@ -65,22 +72,65 @@ for each; read the surrounding comments before porting.
   Resolution is timeout-based and terminal-dependent.
 - **Protocol negotiation.** Kitty keyboard, modifyOtherKeys, and legacy encodings
   produce different bytes for the same keypress. The pane's active mode decides.
-  Note: herdr patched libghostty-vt specifically to expose modifyOtherKeys mode
-  as a scalar (`/Users/ashoknaik/claude-experiments/herdr/vendor/libghostty-vt.patches.md`, patch 0002) — check
-  whether `@xterm/headless` exposes this, and if not, how to track it.
+  herdr patched libghostty-vt specifically to expose modifyOtherKeys as a scalar
+  (`/Users/ashoknaik/claude-experiments/herdr/vendor/libghostty-vt.patches.md`,
+  patch 0002). **This question is already answered for us — see below.**
+
+## Keyboard protocol state: answered
+
+`@xterm/headless` 6.0.0's `term.modes` (`IModes`) exposes exactly ten modes:
+
+```
+applicationCursorKeysMode  applicationKeypadMode  bracketedPasteMode
+insertMode  mouseTrackingMode  originMode  reverseWraparoundMode
+sendFocusMode  synchronizedOutputMode  wraparoundMode
+```
+
+Useful — `applicationCursorKeysMode`, `bracketedPasteMode`, and
+`mouseTrackingMode` are three of the things we would otherwise have to track by
+hand. But **neither modifyOtherKeys nor the kitty keyboard protocol is in
+there.** We track those two ourselves, in the daemon, off the emulator's parser
+hooks. Verified working (Node 22, `allowProposedApi: true`):
+
+```ts
+term.parser.registerCsiHandler({ prefix: '>', final: 'm' }, p => { /* XTMODKEYS  */ return true })
+term.parser.registerCsiHandler({ prefix: '>', final: 'u' }, p => { /* kitty push */ return true })
+term.parser.registerCsiHandler({ prefix: '=', final: 'u' }, p => { /* kitty set  */ return true })
+term.parser.registerCsiHandler({ prefix: '<', final: 'u' }, p => { /* kitty pop  */ return true })
+```
+
+Feeding `ESC[>4;2m ESC[>1u ESC[=5;1u ESC[<1u` fires all four with params
+`[4,2]`, `[1]`, `[5,1]`, `[1]` respectively. So:
+
+- **Keyboard protocol state is daemon-side, not client-side.** It belongs next
+  to the emulator that saw the sequence, per pane, and rides the snapshot to
+  the client. `encode.ts` is a pure function of `(Key, protocol flags)`; the
+  flags are an input, not ambient state.
+- Kitty's flag *stack* is ours to model — `>` pushes, `<` pops, `=` sets the
+  current entry. xterm does not keep one for us.
+- Returning `true` from a handler tells xterm the sequence is fully handled.
+  Return `true` for all four: these are keyboard-protocol negotiation, and
+  letting xterm's default `CSI m`/`CSI u` handling also see them is wrong.
+- `term.parser` throws unless the `Terminal` was constructed with
+  `allowProposedApi: true` (phase 1 already sets it).
 
 ## Acceptance criteria
 
 1. `pnpm test` green, with the transliterated vectors passing.
-2. Fixture corpora from herdr pass (keyboard protocol, linux + macos variants).
-3. Round-trip property test: `encode(parse(bytes)) === bytes` for every vector
+2. All three herdr fixture tables pass (keyboard protocol, linux + macos
+   variants) — 80 rows total.
+3. modifyOtherKeys and kitty keyboard flags are tracked per pane off the
+   emulator's CSI handlers, survive a client detach/reattach, and reach
+   `encode()` as explicit parameters. Test the kitty push/pop stack, including
+   a pop on an empty stack.
+4. Round-trip property test: `encode(parse(bytes)) === bytes` for every vector
    in the corpus where a round trip is defined.
-4. Mouse works in the phase-2 client: click to focus a pane, drag to select.
-5. Paste of a 1MB block arrives as one paste event, not N key events.
-6. A `vim` session in a pane handles arrows, function keys, and modified keys
+5. Mouse works in the phase-2 client: click to focus a pane, drag to select.
+6. Paste of a 1MB block arrives as one paste event, not N key events.
+7. A `vim` session in a pane handles arrows, function keys, and modified keys
    identically to running `vim` outside the multiplexer. Verify by hand on at
    least: iTerm2, Ghostty, Alacritty, and one Linux terminal.
-7. No regression in `bench/RESULTS.md` numbers from phase 2.
+8. No regression in `bench/RESULTS.md` numbers from phase 2.
 
 ## Do NOT do in this phase
 
@@ -93,6 +143,8 @@ for each; read the surrounding comments before porting.
 ## Handoff
 
 Write `HANDOFF.md`:
-- Which terminals were verified and which key combinations are known-broken
+- Which terminals were verified, at which versions, and which key combinations
+  are known-broken
 - Any herdr test vector you could not make pass, and why
 - The `Key`/`MouseEvent` type shape (phase 4 binds actions to these)
+- The keyboard-protocol state type and where it lives on the snapshot

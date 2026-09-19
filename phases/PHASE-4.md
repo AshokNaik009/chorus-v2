@@ -13,15 +13,25 @@ them. It is the largest phase by volume and the smallest by risk.
 herdr's state layer is already pure data, testable without PTYs — this is the
 part of herdr that ports most directly.
 
+Re-measured 2026-09-19 at herdr `3f2a6e74`. The earlier draft of this table
+undercounted badly — `app/` by half, `persist/` by more than half. These are
+`wc -l` over all `.rs` files in the path, tests included.
+
 | herdr file | Lines | What |
 |---|---|---|
-| `/Users/ashoknaik/claude-experiments/herdr/src/app/state.rs` + `app/` | ~18,300 | AppState, actions, runtime |
-| `/Users/ashoknaik/claude-experiments/herdr/src/layout.rs` | ~1,100 | Layout tree, splits, ratios |
-| `/Users/ashoknaik/claude-experiments/herdr/src/workspace/` | 4,064 | Workspace model |
-| `/Users/ashoknaik/claude-experiments/herdr/src/session.rs` | ~1,000 | Session model |
-| `/Users/ashoknaik/claude-experiments/herdr/src/persist/` | 1,902 | Save/restore |
-| `/Users/ashoknaik/claude-experiments/herdr/src/config/` | 5,092 | TOML/JSONC config, reload |
-| `/Users/ashoknaik/claude-experiments/herdr/src/selection.rs` | ~600 | Selection model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/app/` | 36,582 | AppState, actions, runtime (of which `app/state.rs` is 1,504) |
+| `/Users/ashoknaik/claude-experiments/herdr/src/layout.rs` | 1,167 | Layout tree, splits, ratios |
+| `/Users/ashoknaik/claude-experiments/herdr/src/workspace/` | 3,910 | Workspace model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/session.rs` | 1,087 | Session model |
+| `/Users/ashoknaik/claude-experiments/herdr/src/persist/` | 4,207 | Save/restore |
+| `/Users/ashoknaik/claude-experiments/herdr/src/config/` | 7,697 | TOML/JSONC config, reload |
+| `/Users/ashoknaik/claude-experiments/herdr/src/selection.rs` | 645 | Selection model |
+
+That is ~55k lines of Rust, not the ~32k the old table implied. The `~15000
+lines` estimate for `core/` below is therefore optimistic; treat it as a target
+to *design toward*, not a forecast. Rust's test blocks inflate these counts and
+we are deliberately porting a subset — but if `core/` is tracking past 25k,
+that is a signal to cut scope, not to keep typing.
 
 **The API surface is frozen and enumerable.** herdr has exactly 38 endpoint
 methods in `/Users/ashoknaik/claude-experiments/herdr/tests/fixtures/endpoint-method-shapes-v1.json`. Use that
@@ -45,8 +55,15 @@ client_shell.surface.set                              (1)
 product_announcement.dismiss / release_notes.dismiss  (2)
 ```
 
-Phase 4 ships the first 27 (workspace/tab/pane/layout). Worktrees and
-integrations are phase 5. The last three are cosmetic; defer.
+The counts add to exactly 38, matching the fixture.
+
+Phase 4 ships **28**: the 27 workspace/tab/pane/layout methods, plus
+`server.reload_config`, which acceptance criterion 5 below requires and which
+is meaningless to defer when config lands in this phase.
+
+Phase 5 takes `worktree.*` (4) and `integration.*` (2). That leaves **four**
+genuinely deferrable: `command.invoke`, `client_shell.surface.set`,
+`product_announcement.dismiss`, `release_notes.dismiss`. 28 + 6 + 4 = 38.
 
 ## Deliverables
 
@@ -75,14 +92,30 @@ testable without PTYs, sockets, or a terminal — and it is exactly how both
 reference projects keep their logic honest (Orca keeps its host-agnostic logic in `/Users/ashoknaik/claude-experiments/orca/src/shared/`,
 and herdr's `AppState::test_new()`).
 
+**This collides with `core/src/config.ts`, and the collision is real.** Node
+has no built-in TOML parser (no `node:toml`, and no plan for one), so a TOML
+config needs a dependency. Resolve it one of two ways, and say which in the
+handoff:
+
+- Split it: `core/` owns the config *schema*, defaults, merge, and validation —
+  all operating on a plain object — and a separate `config-loader` package owns
+  the TOML text → object step and its dependency. This keeps the rule intact
+  and is the recommended shape.
+- Or drop TOML for JSONC, which is parseable in ~200 lines with no dependency.
+
+Do not quietly add a TOML parser to `core/` and call the rule satisfied.
+
 **Port herdr's invariant checks.** `AppState::assert_invariants_for_test()` and
 `test_with_adversarial_identity_state()` exist because identity/state refactors
 break in subtle ways. Build the TS equivalents in `invariants.ts` now, not later.
 
 ## Acceptance criteria
 
-1. `pnpm test` green. `core` tests run with no I/O and no PTY.
-2. All 27 workspace/tab/pane/layout methods implemented and tested.
+1. `pnpm test` green. `core` tests run with no I/O and no PTY, and `core`'s
+   `package.json` has an empty `dependencies` — assert this in a test, do not
+   trust review.
+2. All 28 methods (27 workspace/tab/pane/layout + `server.reload_config`)
+   implemented and tested.
 3. Persistence round trip: build a 3-workspace / 8-pane state, save, restart the
    daemon, restore, and assert structural equality plus live PTYs reattached.
 4. Invariant check passes against adversarial state (duplicate ids, orphaned
@@ -104,6 +137,8 @@ break in subtle ways. Build the TS equivalents in `invariants.ts` now, not later
 ## Handoff
 
 Write `HANDOFF.md`:
-- Which of the 27 methods are done, and any deliberately skipped
-- The config schema as it actually landed
+- Which of the 28 methods are done, and any deliberately skipped
+- The config schema as it actually landed, the config *format* you chose, and
+  where the parser dependency ended up
+- Actual `core/` line count against the 15k estimate
 - Benchmark numbers with full UI drawn, vs phase 2/3
