@@ -32,8 +32,19 @@ answers that without you visiting each pane.
 ```bash
 pnpm install          # also repairs node-pty's spawn-helper permissions
 pnpm build
-pnpm link --global    # puts `leap-chorus` on your PATH
 ```
+
+That builds everything but installs no command. To get `leap-chorus` on your PATH,
+symlink the built entry into a directory that is already there:
+
+```bash
+ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus
+```
+
+`pnpm link --global` works too, but only after `pnpm setup` *and* opening a new shell —
+`setup` writes `PNPM_HOME` to your shell profile and the session you ran it in has not
+read it yet, so linking immediately afterwards fails with `ERR_PNPM_NO_GLOBAL_BIN_DIR`.
+The symlink needs neither.
 
 Then start it:
 
