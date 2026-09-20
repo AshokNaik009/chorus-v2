@@ -1,9 +1,13 @@
 # Phase 8 — Search, navigation, and the activity bar
 
-**Read `../PLAN.md` and `../HANDOFF.md` first.** Then read the orca section
-below **before writing any code** — it is most of this document, because orca
-has already built this subsystem in TypeScript and the Node-level traps are not
-visible in the Rust source.
+**Read `../PLAN.md`, `../HANDOFF.md` and `PARITY.md` first.**
+
+**The port target is herdr-sidebar.** `PARITY.md` lists the rows this phase has
+to turn green; `explorer_app.rs` is what they should look like and how they
+should behave. Orca appears in this document only as a solutions library — when
+a row needs building in Node, orca has usually already hit the traps. Read
+herdr-sidebar for *what*, orca for *how*, and never let the second one decide
+the first.
 
 ## Why this phase
 
@@ -16,11 +20,29 @@ This phase also turns two panels that happen to share a dock into one panel with
 views. Phase 7 leaves `C-b e` and `C-b g` opening separate objects that each
 close the other by hand; a third view is the point at which that stops scaling.
 
+## What parity means for this phase
+
+From `PARITY.md`, the Search section — every row is this phase's:
+
+| Row | herdr-sidebar's behaviour |
+|---|---|
+| Quick open (`Ctrl+P`) | filter as you type over the file list |
+| Content search (`Ctrl+F`) | one submit per search, results grouped by file |
+| Case / whole-word / regex | `Alt-C` / `Alt-W` / `Alt-R`, toggles redraw the result set |
+| Include / exclude globs | comma-separated, their own focusable fields |
+| Result caps | reported, never silent |
+
+Plus one row from the chrome section: the **activity bar**, which is what makes
+three views one panel. `1`/`2`/`3` already half-work by closing one panel and
+opening another; this phase makes them a real switch that keeps each view's
+cursor and scroll.
+
 ## Source material
 
-### herdr-sidebar — what the feature should do
+### herdr-sidebar — the port target
 
-Measured **2026-09-20** at herdr-sidebar `1a5d37e`.
+Measured **2026-09-20** at herdr-sidebar `1a5d37e`. **Read `explorer_app.rs`
+yourself**; this table says where to look, not what it says.
 
 | File | Lines | What to take |
 |---|---|---|
@@ -46,11 +68,12 @@ binary. We cannot and should not — there is no TypeScript equivalent worth the
 dependency, and this project already delegates to installed tools. Shell out to
 `rg`, and degrade honestly.
 
-### What orca already knows — read this before the Rust
+### What orca already knows — mechanics only
 
-Measured **2026-09-20** at orca `061a756b84`. Orca ships quick open and content
-search over `rg` from Node, and **every one of the following is a mistake this
-phase would otherwise make.**
+Measured **2026-09-20** at orca `061a756b84`. Orca is **not** a parity target
+and its product shape is not ours; what it has is a working `rg` integration in
+Node. Take the mechanics, decide the behaviour from herdr-sidebar. Every one of
+the following is a mistake this phase would otherwise make.
 
 | Orca file | Lines | What it knows |
 |---|---|---|

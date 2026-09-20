@@ -3,8 +3,13 @@
 **Read `../PLAN.md` and `../HANDOFF.md` first.**
 
 **This phase is optional and should be decided, not defaulted into.** Phases 7-9
-port one plugin's *features* natively. This one instead runs herdr's plugins
-unmodified. They are alternatives, and doing both means maintaining both.
+port one plugin's *features* natively — `PARITY.md` tracks how far that has
+got. This one instead runs herdr's plugins unmodified. They are alternatives,
+and doing both means maintaining both.
+
+If phases 7-9 reach parity, this phase's original motivation is mostly gone:
+herdr-sidebar *is* the plugin we wanted, and we would have it natively. What
+survives is the general case — some other plugin, later.
 
 ## Why this phase might be worth it
 

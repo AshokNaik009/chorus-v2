@@ -98,25 +98,37 @@ outside the phase system; `HANDOFF.md` says what, and what it got wrong. They do
 depend on phase 6 and phase 6 does not depend on them. Phase 10 is an alternative to
 7-9's approach, not a continuation of it: read its opening before starting it.
 
-### Read orca for the subsystem, not just the architecture
+**`phases/PARITY.md` is the scoreboard.** It lists every feature herdr-sidebar
+advertises, whether herdr-ts has it, and which phase owns it. "Phases 7-9 are
+done" is not the same claim as "we have parity", and that file is where the
+difference is tracked — including the rows **no phase currently owns**.
+
+### herdr-sidebar is the target; orca is a solutions library
+
+Keep these two roles apart, because conflating them is how the port drifts:
+
+- **herdr-sidebar decides *what* we build.** It is the product being ported and
+  the only thing `PARITY.md` scores against. When its behaviour and orca's
+  disagree, herdr-sidebar wins by default.
+- **Orca shows *how* to build it in Node,** and nothing more. Its product shape,
+  its feature set and its architecture beyond phases 1-5 are not targets.
 
 **Orca was treated as an architecture reference for phases 1-5 and as nothing at
-all for 7-10. That was a mistake, and it cost phase 7 real bugs.** Orca is a
-production TypeScript application that already ships a git panel, quick open,
-content search, bounded file preview and a plugin host — the same four subsystems
-phases 7-10 build, in the same language, against the same Node APIs.
+all for 7-10. That half was a mistake, and it cost phase 7 real bugs.** Orca is a
+production TypeScript application whose *implementation* of a git panel, quick
+open, content search and bounded file reads already hit the traps ours will:
+`execFile` silently truncating at `maxBuffer`, git translating its own `fatal:`
+under a non-English locale, `git status` fighting a user's shell over
+`index.lock`, a spawn failure read as a missing binary, UTF-8 filenames split
+across stream chunks. None of that is visible in Rust source, and all of it is in
+orca with a comment explaining why.
 
-herdr-sidebar answers *what the feature should do*. Orca answers *what goes wrong
-when you build it in Node*: `execFile` silently truncating at `maxBuffer`, git
-translating its own `fatal:` under a non-English locale, `git status` fighting a
-user's shell over `index.lock`, a spawn failure being read as a missing binary,
-UTF-8 filenames split across stream chunks. None of that is visible in Rust
-source, and all of it is in orca with a comment explaining why.
-
-**Before starting any phase from here on, grep orca for the subsystem first.**
-Each live phase doc now has a "What orca already knows" section with the files
-and the findings. Those were measured on **2026-09-20** at orca `061a756b84`;
-orca moves, so re-measure before trusting a line number.
+**So: read herdr-sidebar for the feature, then grep orca for the mechanics.**
+Each live phase doc has a "What orca already knows" section, scoped to mechanics.
+Measured **2026-09-20** at orca `061a756b84`; orca moves, so re-measure before
+trusting a line number — and verify empirically either way, because checking
+orca's `--porcelain=v2` usage showed it does *not* fix the rename defect that a
+summary would have claimed it did.
 
 Phases 1 and 2 carry all the architectural risk. If they succeed, the rest is
 volume. If they fail, stop — and you will have spent 4 weeks, not 4 months.

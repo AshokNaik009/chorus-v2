@@ -1,6 +1,12 @@
 # Phase 9 — Preview, icons, and settings
 
-**Read `../PLAN.md` and `../HANDOFF.md` first**, then the orca section below.
+**Read `../PLAN.md`, `../HANDOFF.md` and `PARITY.md` first.**
+
+**The port target is herdr-sidebar.** This phase owns the largest block of
+still-red rows in `PARITY.md` — preview, icons, docking, `[sidebar]` settings
+and the AI commit draft — and it is also where the **orphans** have to be
+resolved one way or the other. Read that file's closing section before
+planning. Orca appears below as a solutions library only.
 
 ## Why this phase
 
@@ -39,12 +45,13 @@ experimental. This project launches `$EDITOR` in a pane, which is better than a
 worse editor. If a future session disagrees, that is a decision to write down in
 PLAN.md, not to slip into a phase.
 
-### What orca already knows
+### What orca already knows — mechanics only
 
-Measured **2026-09-20** at orca `061a756b84`. Orca is Electron, so it has nothing
-to say about terminal glyph widths — the icon work below is ours alone. It has a
-great deal to say about **reading files safely** and **not losing the settings
-file**.
+Measured **2026-09-20** at orca `061a756b84`. Not a parity target. Orca is
+Electron, so it has nothing to say about terminal glyph widths or docking — the
+icon work below is ours alone, and herdr-sidebar's `fontsetup.rs` is the
+reference for it. What orca has is **reading files safely** and **not losing the
+settings file**.
 
 | Orca file | Lines | What it knows |
 |---|---|---|

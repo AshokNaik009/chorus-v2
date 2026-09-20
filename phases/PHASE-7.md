@@ -12,6 +12,11 @@ phase. Do the follow-ups as part of phase 8 or 9, whichever touches the file.
 Phase 6 (remote SSH attach) is still reserved and unbuilt. Phases 8-9 do not
 depend on it and it does not depend on them.
 
+**For what this phase left red, see `PARITY.md`.** It also records that phase
+7's "no commit history, file history, stashes, tags or remotes browsing —
+later, if ever" left eight Source Control drawers with **no phase owning them**,
+which needs a decision rather than a default.
+
 ---
 
 ## What this phase claimed, and what was true
