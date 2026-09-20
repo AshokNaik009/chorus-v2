@@ -540,6 +540,12 @@ export class DaemonServer {
         return gitRpc.gitDiscard(this.gitContext(), params)
       case 'git.commit':
         return gitRpc.gitCommit(this.gitContext(), params)
+      case 'git.branches':
+        return gitRpc.gitBranches(this.gitContext(), params)
+      case 'git.checkout':
+        return gitRpc.gitCheckout(this.gitContext(), params)
+      case 'git.sync':
+        return gitRpc.gitSync(this.gitContext(), params)
       case 'worktree.list':
         return worktrees.worktreeList(this.worktreeContext(), params)
       case 'worktree.create':

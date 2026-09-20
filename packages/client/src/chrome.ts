@@ -106,6 +106,34 @@ export function emptyHitRegions(): HitRegions {
   }
 }
 
+/**
+ * Break `text` onto lines of at most `width`, on spaces where possible.
+ *
+ * A word longer than the whole width — a path, usually — is hard-split rather than
+ * dropped, so the line count is bounded and nothing disappears.
+ */
+export function wrapWords(text: string, width: number): string[] {
+  if (width <= 0) return []
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter((part) => part.length > 0)) {
+    if (line.length === 0) {
+      line = word
+    } else if (line.length + 1 + word.length <= width) {
+      line = `${line} ${word}`
+    } else {
+      lines.push(line)
+      line = word
+    }
+    while (line.length > width) {
+      lines.push(line.slice(0, width))
+      line = line.slice(width)
+    }
+  }
+  if (line.length > 0) lines.push(line)
+  return lines
+}
+
 export interface Palette {
   readonly focusBorder: Style
   readonly idleBorder: Style

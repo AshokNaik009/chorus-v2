@@ -1,332 +1,360 @@
-# HANDOFF — phase 5 done, plus an unphased sidebar slice
+# Handoff — end of Phase 7
 
-**Read `PLAN.md` first.** This file is the state of the world as this session leaves it.
-Everything was measured on 2026-09-20, macOS (darwin 26.6.2, arm64, Apple silicon),
-Node v22.1.0, pnpm 10.18.0.
+**Read `PLAN.md` first, then `phases/PHASE-8.md`.** This file is the state of the world
+as this session leaves it. Everything was measured on 2026-09-20, macOS (darwin 25.6.0,
+arm64, Apple silicon, 10 cores), Node v22.1.0, pnpm 10.18.0, **git 2.54.0 (Apple Git-157)**.
 
-The project is now **leap-chorus**. `herdr-ts` was the working name for phases 1–4 and
-survives only in provenance comments and `NOTICE`.
+## Status
 
-## Since phase 5: the sidebar slice, built outside the phase system
-
-A later session ported the first slice of **herdr-sidebar**
-(`/Users/ashoknaik/claude-experiments/herdr-sidebar`, MIT, measured at `1a5d37e`) without a
-phase doc. It is committed, tested and pushed. **Phases 7-10 now exist to finish it
-properly — read `phases/PHASE-7.md` next.** Phase 6 (SSH) is still reserved and unbuilt;
-7-9 neither depend on it nor block it.
-
-`pnpm test` is **893 tests** as this session ends, up from 805.
-
-### What landed
-
-| Area | Files | What it does |
-|---|---|---|
-| Working-tree git | `packages/daemon/src/git.ts` (282) | status, stage, unstage, discard, commit. Porcelain parsing ported from herdr-sidebar's `git.rs` |
-| Live cwd | `packages/daemon/src/cwd.ts` (87) | the shell's *real* directory: procfs on Linux, `lsof` on macOS |
-| Filesystem | `packages/daemon/src/fs.ts` (108) | `fs.list`, the daemon's first fs surface; containment checked after symlinks resolve |
-| Source Control | `packages/client/src/scm.ts` (333) | `C-b g`. Changes list, stage/unstage, commit, discard, diff in a pane |
-| Explorer | `packages/client/src/explorer.ts` (346) | `C-b e`. Lazy tree, git decorations, scrolling |
-| Pane CLI | `packages/client/src/main.ts` | `pane list/open/focus/zoom/close`, shaped like herdr's |
-
-New methods: `fs.list`, `git.status`, `git.stage`, `git.unstage`, `git.discard`,
-`git.commit`. All take `paneId` (preferred) or `cwd`.
-
-```ts
-interface GitFileEntry { path: string; origin: string | null; letter: string }
-interface GitStatusResult {
-  root: string; branch: string
-  staged: readonly GitFileEntry[]; unstaged: readonly GitFileEntry[]
-  ahead: number; behind: number; hasUpstream: boolean
-}
-interface FsListResult { root: string; path: string; entries: readonly FsEntry[] }
-interface FsEntry { name: string; kind: 'dir' | 'file' | 'other'; link: boolean }
-```
-
-### Two confirmed defects, both left open on purpose
-
-Verified against real git on 2026-09-20. Repros and fixes are in `phases/PHASE-7.md`.
-
-1. **Staging a rename leaves a dangling deletion.** `git.ts` stages only the selected
-   path; herdr-sidebar passes the origin too. `GitFileEntry.origin` is on the wire and
-   unused.
-2. **The Source Control panel does not scroll.** It draws until it runs out of height,
-   but the cursor keeps moving — so `Enter` can stage a file you cannot see. The
-   Explorer got a viewport and the changes list never did.
-
-### Things established by running them, not by reasoning
-
-Recorded because each one cost a wrong assumption first:
-
-- `git restore --staged` fails `fatal: could not resolve 'HEAD'` on a repo with no
-  commits. Unstage therefore uses `reset -q HEAD --`.
-- `-z` porcelain v1 writes renames **target first**: `XY PATH\0ORIG_PATH\0`. Confirmed
-  against git's docs and raw bytes.
-- `pane.cwd` is the *spawn* directory. `cd` updates nothing and announces nothing, so
-  anything wanting the live directory must read the process.
-- The client's `this.call` catches errors into the status bar. A panel that needs its
-  own error must call `options.client.call` directly.
-- **`packages/client/test/multiplexer.test.ts` is flaky** — roughly 2 runs in 3, a
-  different test each time. Reproduced on a stashed, clean tree: it predates all of the
-  above. Not yet diagnosed.
-
-## Status: phase 5 complete on eight of ten criteria; two need a machine this is not
-
-`pnpm test`: **805 of 806 pass**. Phase 4 left 608; this session added 198.
-
-The one failure is phase 1's flood test (`backpressure.test.ts`, "holds RSS steady
-across 30s of `yes`"), and it is **environmental, not a regression**. It passes alone
-in 40.3 s, twice verified. It times out only in a full serial run on this machine,
-which spent the session under a load average of 6-10 with an unrelated macOS process
-(`BTLEServer`) pinned at 100% CPU. The measurement that settles it: a 970-second run
-used 49 seconds of CPU — 5%. The suite was starved, not slow. **Check `uptime` before
-believing any timing from this suite**, and re-run that test alone before filing it as
-a bug.
+- **Phase 7 complete: yes, on 7 of 8 criteria.** Criterion 8 is a measurement this
+  machine could not make; see **Numbers**. Nothing is unimplemented.
+- `pnpm test` is **959 tests**, up from 893. One fails in a full serial run
+  (`client/test/multiplexer.test.ts`) and passes 16/16 alone — the flake the previous
+  handoff already documented, unchanged and still undiagnosed.
 
 | # | Criterion | Verdict | Where |
 |---|---|---|---|
-| 1 | `pnpm test` green | met, with one load-induced timeout | see above |
-| 2 | detection live for 3 agents, all 4 states, versions recorded | **not met** | only `claude` is installed on this machine |
-| 3 | 15 panes polling → one `ps` per TTL, proven by a counter | met | `detect/src/process-table.test.ts`, `daemon/test/agents.test.ts` |
-| 4 | worktree create/list/open/remove; two agents do not collide | met | `daemon/test/worktrees.test.ts` |
-| 5 | integration install is correct and idempotent | met | same file |
-| 6 | bench re-run with detection; p99 unmoved | met | `bench/RESULTS.md`, and the A/B below |
-| 7 | tarballs build per slot and run on a clean machine | **1 of 6 slots** | darwin-arm64 verified here; no Docker, no Linux |
-| 8 | glibc floor asserted in CI | code + unit tests, **never executed** | `scripts/check-glibc-floor.mjs`, `daemon/test/glibc-floor.test.ts` |
-| 9 | survival across a real client version bump | met | `daemon/test/update-survival.test.ts` |
-| 10 | rebrand complete | met | `grep -ri herdr` returns only provenance |
+| 1 | `pnpm test` green | met, minus the known flake | see above |
+| 2 | rename repro is a test; staging leaves nothing unstaged | met | `daemon/src/git.test.ts`, `describe('staging a rename')` |
+| 3 | more files than the panel is tall: all reachable, view follows, right file staged | met | `client/test/source-control.test.ts`, `describe('a changes list taller than the panel')`, driven at `rows: 14` |
+| 4 | `git.branches` lists local + remote, current marked; `git.checkout` switches and tracks | met | `git.test.ts`, `describe('branches, checkout and sync')` |
+| 5 | picker opens from the panel, filters, branch line updates with no refresh | met | `client/src/branch.test.ts` + `source-control.test.ts`, `describe('the branch picker')` |
+| 6 | `git.sync` on a dirty tree; a conflict reads as a conflict | met | both files, `describe('sync')` |
+| 7 | staging a directory stops at a nested repository | met | `git.test.ts` + `client/test/explorer.test.ts`, `describe('staging from the explorer')` |
+| 8 | no regression in `bench/RESULTS.md` | **not measurable here**; no regression shown by A/B | see **Numbers** |
 
-Criteria 2, 7 and 8 are blocked on hardware, not on unwritten code. Everything they
-need exists and is unit-tested; what is missing is a Linux box, a container runtime,
-and `codex`/`opencode` installed. **Do not mark them done without running them.**
+## What exists now
 
-## The four bugs that only running things found
+Source control is usable for a day's work without reaching for the shell. The panel
+scrolls, its branch line is a picker you can filter, `S` syncs, and staging is
+rename-aware and nested-repository-aware on both sides of the index. The Explorer can
+stage a directory. Two rename defects and one scrolling defect that PHASE-7 opened with
+are closed and pinned by tests; the third item (`--renames`) turned out to matter for a
+reason the doc did not give. The daemon is still stateless — every call shells out, and
+nothing is cached.
 
-Every one of these passed code review and unit tests. They were found by executing the
-built artifact, which is the lesson worth carrying into phase 6.
+## Deliverables, as they landed
 
-1. **The release tarball did nothing.** `import.meta.url` resolves symlinks;
-   `process.argv[1]` does not. On macOS `/tmp` and `/var` are symlinks into
-   `/private`, so the `import.meta.url === file://${argv[1]}` entrypoint guard was
-   false for every install under either — the client started, printed nothing, and
-   exited 0. Fixed by `isEntrypoint()` in `adopt.ts`, which compares real paths.
-   Pinned by a test.
-2. **`worktree.remove` ran `git branch -D` in the directory it had just deleted.**
-   `rev-parse --show-toplevel` inside a linked worktree returns *that worktree*, so
-   `repo` was the thing being removed. Now every git call after the removal runs from
-   the primary tree.
-3. **Pane↔worktree matching never matched.** git prints real paths, a pane's cwd is
-   whatever the user typed. Same symlink root cause as (1); fixed with
-   `canonicalPath()` on both sides.
-4. **A detached daemon could not be stopped.** Detaching leaves it running by design,
-   but there was no command to end one — found by leaving an orphan running for 75
-   minutes, where it quietly competed with every benchmark on the machine and made
-   "detection off" look slower than "detection on". `leap-chorus kill-server` now
-   exists, and does not start a daemon in order to kill it.
-5. **Hover could never have worked.** The client asked for `?1002h` (button tracking)
-   and `?1006h` (SGR) but never `?1003h` (any-motion). Clicks worked all along; motion
-   with no button held was never reported. Now opt-in via `[general] mouse-hover`.
-
-## Detection: the design, and what is different from herdr
-
-`@leap-chorus/detect` is 2,942 lines. The manifest design is herdr's and was ported
-deliberately: rules are TOML data with AND/OR/NOT gates over named screen regions, so
-a vendor shipping a new spinner is a file edit, not a release.
-
-Three of the four bundled sources of truth:
-
-| Source | Cost | Authority |
+| File | Lines | What |
 |---|---|---|
-| an installed hook | nothing per byte | highest, for 30 s after it arrives |
-| the screen, via a manifest | one region scan per pane per poll | fallback |
-| the process table | one shared `ps` per 500 ms TTL | says *which* agent, and `done` |
+| `packages/daemon/src/git.ts` | 662 (was 282) | rename-aware stage/unstage, directory staging, nested-repo boundary, `branches`, `checkout`, `sync` |
+| `packages/daemon/src/rpc/git.ts` | 128 (was 95) | `git.branches` / `git.checkout` / `git.sync` |
+| `packages/client/src/scrollview.ts` | 106 | the shared viewport: offset, cursor-follow, bar |
+| `packages/client/src/scm.ts` | 386 (was 333) | scrolling, branch key, sync key, note line, click routing |
+| `packages/client/src/branch.ts` | 200 | the branch picker overlay |
+| `packages/client/src/explorer.ts` | 367 (was 346) | on `ScrollView`; `s` stages; errors wrap |
 
-**`done` is ours, not herdr's.** herdr has four states; a pane whose agent has *exited*
-draws the same transcript as one sitting idle, and no screen rule can separate them.
-The process table can, so `done` comes from there and nothing else may claim it — an
-integration reporting `state: "done"` is rejected at the endpoint.
+`wrapWords` moved from `scm.ts` to `chrome.ts` because the Explorer needed it too — see
+**Surprises**.
 
-**The screen overrules a live hook in exactly one case**: a visible blocker. A missed
-permission-prompt event otherwise leaves a pane reading `working` while it silently
-waits for the user, which is the worst failure this feature has.
+## Types and contracts the next phase depends on
 
-### Porting Rust regexes to JavaScript
+Three new methods on `AgentMethodMap`, all in `AGENT_METHODS`:
 
-The one genuinely tricky part, all of it in `detect/src/regex.ts`:
-
-| Rust | JavaScript | What we do |
-|---|---|---|
-| `(?i)` `(?m)` `(?s)` | not supported | lift a **leading** flag group to `RegExp` flags |
-| `\x{2733}` | needs `u` | rewrite to `\uXXXX`, which needs nothing |
-| `\A` / `\z` | not supported | rewrite to `(?<![\s\S])` / `(?![\s\S])` |
-| `\p{L}` | needs `u` | set `u`, and switch `\x{}` to `\u{}` to match |
-
-A flag group anywhere but position 0 is a **compile error**, not a best guess: Rust
-scopes it to the enclosing group and a lifted flag would apply to the whole pattern,
-which silently turns a precise blocker rule into one that matches prose. All three
-bundled manifests put them first. Not translated, and recorded as a known gap: `\d`
-`\w` `\s` are Unicode-aware in Rust and ASCII-only in JS without `u`.
-
-`bundled.test.ts` compiles every shipped manifest, which is what proves the
-translation actually works on herdr's real rules — including claude's multi-line MCP
-matcher.
-
-### What is deliberately not ported
-
-**herdr's remote manifest catalog.** It is a supply chain: a rule file fetched over the
-network decides what runs a regex against the user's terminal, and it needs signing,
-pinning and a rollback story first. The local override path is what makes the
-development loop work, and that is the half that earns its keep.
-
-## Manifests, and how bundling works
-
-Manifests live in `packages/detect/manifests/*.toml` and are compiled into
-`src/bundled.ts` by `scripts/generate-bundled-manifests.mjs`, with a test that fails if
-the two disagree. They are **string constants, not files read at runtime**, for the
-same reason node-pty is externalized: the shipped app goes through a bundler, and a
-path computed at runtime is the one thing a bundler cannot follow. User overrides are
-still read from disk, because their path cannot be known at build time.
-
-Bundled today: `claude`, `codex`, `opencode`. herdr has 22; port on demand.
-
-## Packaging
-
-`pnpm build` → `tsc`. `node scripts/build-app.mjs` → two ESM bundles plus node-pty.
-
-**ESM, not CJS**, and this is load-bearing: a CJS bundle empties `import.meta.url`,
-which is how the client finds its daemon. esbuild warns about it; the warning was
-right.
-
-**node-pty is external and always will be.** Its `lib/utils.js` computes
-`prebuilds/${process.platform}-${process.arch}` at runtime. No bundler can resolve
-that — not esbuild, not webpack, not ncc, and not Bun's `--compile`. PHASE-5 called
-this correctly.
-
-Six slots. A tarball carries the app, a **pinned Node** (~50 MB, and the reason
-criterion 7 is satisfiable at all), and only the one prebuild its slot can load —
-pruning the others took the tree from 62 MB to 4.1 MB.
-
-### node-pty and the glibc floor
-
-**Shipped state: node-pty 1.1.0, with `patches/node-pty@1.1.0.patch` applied.**
-Upstream 1.1.0 has **no Linux prebuilds** (verified 2026-09-19: darwin-arm64,
-darwin-x64, win32-arm64, win32-x64 only), so every Linux slot compiles its own in its
-own container. We did **not** move to the 1.2.0 beta line.
-
-The patch is orca's, reduced: `.symver` pins on `openpty`, `forkpty` and
-`pthread_sigmask`, plus `--no-as-needed` ldflags to keep libutil/libpthread in
-`DT_NEEDED`. **The floor committed to is glibc 2.31** (Ubuntu 20.04).
-
-`scripts/check-glibc-floor.mjs` parses `.gnu.version_r` out of the ELF directly — no
-`readelf`, because the musl smoke image has no binutils and macOS has no ELF at all.
-It is unit-tested against synthetic ELFs, **including the failing case** a post-2.34
-build produces. It has never run against a real Linux binary.
-
-### What was actually verified here
-
-```
-sh scripts/smoke-tarball.sh dist-release/leap-chorus-0.0.0-darwin-arm64.tar.gz
+```ts
+'git.branches': { params: GitStatusParams;   result: GitBranchesResult }
+'git.checkout': { params: GitCheckoutParams; result: GitStatusResult }
+'git.sync':     { params: GitStatusParams;   result: GitSyncResult }
 ```
 
-passes all four stages: the launcher execs the pinned node with `/usr/bin:/bin` as the
-entire `PATH`, `--help` prints, the daemon starts, and **it forks a real PTY** — which
-is the first call into `forkpty` and therefore the first thing a mispinned symbol
-would break.
+```ts
+interface GitBranch { name: string; current: boolean; remote: boolean }
+interface GitBranchesResult { root: string; branches: readonly GitBranch[] }
+interface GitCheckoutParams extends GitTargetParams { branch: string; remote?: boolean }
+interface GitSyncResult { status: GitStatusResult; message: string }
+```
 
-## Benchmark (criterion 6)
+`GitStatusResult`, `GitFileEntry`, `GitPathsParams` and `FsListResult` are unchanged.
+`git.stage` and `git.unstage` keep their signatures; only what they do with the paths
+changed.
 
-Detection runs in the daemon on a 750 ms poll. The A/B below was run **sequentially,
-with nothing else on the machine**, because the first attempt was contaminated —
-running the test suite alongside it produced a "detection off" column *slower* than
-"detection on" in every scenario, which detection cannot cause.
+The shared viewport, which PHASE-8's own lists should use rather than copy:
 
-**Do not run two benchmarks at once, and do not run one alongside the test suite.**
-That mistake has now produced bad numbers twice across two phases.
+```ts
+class ScrollView {
+  offset: number
+  follow(cursor: number, count: number, height: number): number
+  by(delta: number, count: number, height: number): void
+  indexAt(row: number, top: number, count: number, height: number): number | null
+}
+function needsScrollbar(count: number, height: number): boolean
+function renderScrollbar(buffer: ScreenBuffer, area: Rect, offset: number, count: number, palette: Palette): void
+```
 
-See `bench/RESULTS.md` for the committed run. p99 at fifteen panes is well inside the
-16 ms budget with detection live.
+It holds **an offset and nothing else** — no cursor, no rows, no height. The cursor
+belongs to the panel (it means different things in a tree and in a two-section list) and
+the height is the renderer's, because a panel that has not been drawn has none. `follow`
+is therefore called from `render`, which is how the Explorer's original `syncScroll`
+already worked.
 
-## What phase 6 should know
+**Used by:** `ScmPanel`, `ExplorerPanel`, and `BranchPicker`. The old
+`ExplorerPanel.syncScroll` and its private `scroll` field are gone.
 
-- `packages/detect/src/detector.ts` is where the three evidence sources meet. Any new
-  signal goes there, not into the manifests.
-- `SessionRuntime.detectOnce()` is the poll, and it is public so a test never waits on
-  a timer. `LEAP_CHORUS_DETECT_INTERVAL_MS=0` turns it off.
-- `packages/daemon/src/worktree.ts` never caches. Keep it that way.
-- The ten new methods are in `AGENT_METHODS`; `agents.test.ts` walks it and asserts
-  none answers `unknown_method`.
+### The exact git invocations
 
-## Open threads
+| Operation | Command | Differs from herdr-sidebar? |
+|---|---|---|
+| status | `status --porcelain -z --branch --renames --untracked-files=all` | no |
+| stage | `add -A -- <paths…>`, in chunks of 64 | **enumerated, not passed through** — see below |
+| unstage | `reset -q HEAD -- <paths…>` (or `-- .` for all) | yes: herdr uses `reset -q --` with an `rm --cached` fallback |
+| discard (tracked) | `checkout -- <paths…>` | yes: herdr uses `clean -fd` for untracked; we `rm` in Node |
+| commit | `commit -m <message>` | no |
+| branches | `for-each-ref --sort=-committerdate --format=%(HEAD)%00%(refname:short)%00%(refname)%00%(symref) refs/heads refs/remotes` | no |
+| checkout | `checkout <name>`, or `checkout --track <name>` when remote | no |
+| sync | `pull --rebase --autostash`, **then** `push` | no |
+| rename pairing | `hash-object -- <paths…>` and `ls-files -s -z -- <paths…>` | **ours; herdr has no equivalent** |
 
-- **Nothing is committed.** Still. The working tree remains the only copy, now ~30,150
-  lines. This has been a deliberate instruction every session, but a backup was taken
-  to the scratchpad before the rename and that is not a substitute.
-- **Criterion 2 is the important gap.** Detection is a compatibility claim about three
-  vendors' CLIs and none of it has been checked against a running agent. The engine is
-  proven; the rules are inherited from herdr at a commit from 2026-09-19 and may
-  already be stale.
-- **`codex` has no integration**, deliberately: it has no user-configurable command
-  hook, so it would install as a no-op that reports nothing and looks broken.
-- **`DaemonClient` still has no request timeout.** Unchanged from phase 4, and input
-  is still serialized behind the current command's round trip.
-- **Test files are still not typechecked.** Pre-existing since phase 1; it cost time
-  again this session.
-- **The human terminal check is partly closed.** Mouse click and hover were driven by
-  hand in a real terminal this session. vim-in-a-pane, iTerm2/Ghostty/Alacritty and a
-  Linux terminal remain unchecked.
-- **`agent.explain` takes a fresh `ps`** on every call. That is right for a human
-  asking a question and wrong if anything ever calls it in a loop.
-- **The suite turns detection off** (`LEAP_CHORUS_DETECT_INTERVAL_MS=0`, set in
-  `vitest.config.ts`). Nothing is lost — `detectOnce()` is public and the tests that
-  care call it — but a future test that wants to exercise the *timer* has to opt back
-  in.
-- **A leaked daemon is expensive now.** It used to idle; since phase 5 it forks `ps`
-  every 750 ms forever. Nine accumulated from manual probes during this session and
-  quietly spoiled three benchmark runs before being noticed. `kill-server` is the
-  cure; `pgrep -f leap-chorusd` is the check.
-- **A daemon reached the real `~/.leap-chorus` during a test run**, reproducing phase
-  4's unexplained thread — same shape, one pane at `cwd: "/"` running `/bin/bash`. The
-  caller is still unidentified. A global `LEAP_CHORUS_DATA_DIR` guard was tried and
-  **made things worse** (every file then contended for one instance lock), so it was
-  reverted. Whoever picks this up: find the caller, do not redirect the destination.
+**`sync` is `pull --rebase --autostash` then `push`, unchanged from herdr-sidebar.** The
+autostash is load-bearing, not a convenience: the tree a source-control panel is open
+over is a dirty tree by definition, and `pull` or `pull --ff-only` refuses to start on
+one. Substituting either would make the button work only in the state where nobody needs
+it.
 
-## The v1 decision
+**Push does not run if the pull failed.** Verified: a stopped rebase leaves HEAD
+detached, and `push` from there fails with `fatal: You are not currently on a branch`,
+which describes nothing the user did.
 
-**What ships.** A terminal multiplexer that knows what its agents are doing:
-workspaces, tabs, panes, a layout tree, a persistent session, TOML config with
-hot-reload, mouse, copy mode over the API, agent detection for three agents through a
-manifest engine, git worktrees, agent hook installation, and tarballs that run on a
-machine with nothing installed.
+**Two deviations from herdr-sidebar, both deliberate:**
 
-**What is missing versus herdr.** Windows (8,398 lines, deliberately deferred). Kitty
-graphics (1,509 lines, no TS path). Plugins (~5,400 lines, post-v1). Nineteen of
-twenty-two detection manifests. A remote manifest catalog. Modals, drag-to-resize, and
-`pane.move` between tabs.
+1. **`unstage` uses `reset -q HEAD --`, not `reset -q --` with an `rm --cached`
+   fallback.** herdr's fallback exists for an unborn branch. Verified on git 2.54:
+   `reset -q HEAD -- <path>` **exits 0 on a repository with no commits**, so the
+   fallback has nothing to catch here — and `rm --cached` on a repo that *does* have a
+   HEAD stages a deletion instead of unstaging, which is why herdr guards it with
+   `has_head()`. Not porting the fallback removes the need for the guard. If a git old
+   enough to fail this ever matters, `has_head()` is the thing to port.
+2. **`stage` enumerates instead of passing the path to `git add`.** Same reasoning as
+   herdr's `stage_under`, applied to every stage rather than only to directories, so
+   there is one code path. A file path expands to itself plus its rename partner; a
+   directory expands to the working-tree entries beneath it; an empty path list expands
+   to the whole repository.
 
-**Is phase 6 (SSH) worth starting?** The throughput evidence: five phases, ~30,150
-lines of TypeScript including tests, against PLAN.md's estimate of ~45k lines over 4–5
-months. The `core` package came in at a quarter of its 15k budget because four
-subsystems were explicitly out of scope; `detect` came in at 2,942 lines against
-herdr's 5,291 for the same job, which is the honest ratio for a port that keeps the
-design and changes the plumbing.
+### Where the scroll viewport lives, and which panels use it
 
-On that evidence phase 6's ~5k lines and ~1 month is credible, and orca's remote
-deploy files are a genuine wholesale take. **But it should not be started yet.**
-Criterion 2 is unmet, and three of six platform slots have never been built, let alone
-run. Shipping v1 means a stranger installs it on Linux and points it at their agents —
-both of the things v1 does that phases 1–4 did not are exactly the two things this
-session could not verify. Finish those on a Linux box with the agents installed, then
-start phase 6.
+`packages/client/src/scrollview.ts`. `ScmPanel` and `ExplorerPanel` both draw through
+it, and `BranchPicker` uses it for its own list. The bar takes the panel's **last
+column, and only when there is something to scroll** — reserving it unconditionally
+would steal a column of filename from every panel that fits.
+
+One panel-level rule lives in `ScmPanel.follow`, not in `ScrollView`, because it is
+knowledge about headers: **when the cursor lands on the first row of a section, the
+section header comes with it.** Without that, staging a file scrolls the view to the
+file's new position and leaves `Staged Changes (1)` exactly one row above the top, which
+reads as the file having moved into nothing. It was found by a test failing, not by
+inspection.
+
+### Key map changes in the Source Control panel
+
+| Key | Was | Is |
+|---|---|---|
+| `b` | close (a second `q`) | **open the branch picker** |
+| `S` | — | **sync** |
+| `q`, `esc` | close | unchanged |
+
+`b` was worth more as the branch key: closing already had two keys and switching branch
+had none. `S` is capitalised deliberately, matching herdr-sidebar — sync talks to the
+remote and can rebase, so it should not be one relaxed finger away. The Explorer keeps
+`b` as a close alias; it has no branch line. Both hint strings are updated.
+
+The Explorer gained **`s` = stage the selected path**, which is where criterion 7 lives:
+a directory is a thing you can point at in a tree and cannot in the changes list.
+
+## The three defects
+
+### 1. Staging a rename left a dangling deletion — fixed, but **not the way PHASE-7 says**
+
+This is the most important thing in this handoff. **The phase doc prescribes a fix that
+does not close its own repro.**
+
+The doc says `GitFileEntry.origin` "already carries the original path over the wire; it
+is simply unused", and that passing both paths (herdr's `add -A -- <path> <orig>`) is
+the fix. Verified against git 2.54.0, and it is not. Run the doc's own repro:
+
+```sh
+git mv old.txt new.txt && git reset -q HEAD -- .
+git status --porcelain -z --renames | tr '\0' '|'
+#  D old.txt| ?? new.txt|
+```
+
+Two unrelated entries, **`origin: null` on both**. Git only pairs a worktree-side rename
+when the target is already tracked, and an untracked file is not. So there is no origin
+to pass, and herdr-sidebar's `Git::stage` has exactly the same gap — its own test for
+this (`stage_candidates_keep_both_sides_of_an_unstaged_rename`, `git.rs:1285`) feeds
+`parse_status` a **synthetic** ` R src/new.rs\0src/old.rs\0` entry that real git does
+not emit in this state.
+
+What *does* close it: `git add -A -- old.txt new.txt` composes the two back into an `R`
+once both land in the index together. So the missing half is found the way git itself
+would — by blob identity:
+
+- `git hash-object -- <untracked paths>` for the working-tree side
+- `git ls-files -s -z -- <deleted paths>` for what the index holds
+
+**Guarded three ways, because a stage must never stage work the user did not select:**
+exact content (not similarity), **exactly one** candidate match on each side, and the
+empty blob (`e69de29…`) never pairs — every `.gitkeep` in a repository hashes the same.
+Both guards have tests. When no pair is found, behaviour falls back to the old one,
+which is merely unhelpful rather than wrong.
+
+The origin fix is **also** implemented, because it is right for the cases where status
+*does* report a rename (`RM`, ` R`, and the whole staged side).
+
+**The same defect exists on the unstage side and PHASE-7 does not mention it.** Verified:
+a staged `R old -> new` reset by its new path alone leaves `D old.txt` still staged.
+Fixed by the same expansion against the staged list.
+
+### 2. The Source Control panel did not scroll — fixed
+
+Lifted the Explorer's `syncScroll` into `scrollview.ts` rather than writing it twice,
+as the phase asked. The consequence worth naming: the cursor used to move onto rows that
+were never drawn, so `Enter` could stage a file the user could not see.
+
+### 3. `--renames` — **it matters, and not for the reason you would guess**
+
+The phase doc suspected it was cosmetic because rename detection is on by default.
+Measured:
+
+```
+$ git status --porcelain -z --branch --untracked-files=all
+## main|R  new.txt|old.txt|                      # rename detected
+$ git -c status.renames=false status --porcelain -z --branch --untracked-files=all
+## main|A  new.txt|D  old.txt|                   # decomposed
+$ git -c status.renames=false status --porcelain -z --branch --renames --untracked-files=all
+## main|R  new.txt|old.txt|                      # the flag overrides the config
+```
+
+So it is cosmetic **in a default configuration** and not otherwise: a user with
+`status.renames = false` (or `diff.renames = false`, which it inherits from) changes what
+the panel shows. The flag on the command line wins over both. Passing it makes the
+daemon's output depend on the repository rather than on the user's `~/.gitconfig`, which
+is the property worth having. Passed.
+
+## Numbers
+
+**Criterion 8 could not be measured on this machine, and `bench/RESULTS.md` is left at
+the committed run rather than overwritten with a contaminated one.**
+
+The machine sat at load average **8–23 for the whole session** (10 cores), from Chrome,
+VS Code, `PerfPowerServices` and `BTLEServer` — the last of which is the *same*
+unrelated macOS process the previous handoff blamed for spoiling its measurements. It
+was polled every 25 s for eight minutes and never dropped below 7.7.
+
+A plain run produced `Realistic 15` frame p99 of **21.06 ms** against the committed
+3.24 ms, which would have recorded criterion 7 as a FAIL. It was reverted
+(`git checkout bench/RESULTS.md`) rather than committed, and an **A/B** run instead —
+the same benchmark against the pre-phase-7 tree and the phase-7 tree, back to back:
+
+| Scenario | p50 before | p50 after | paint p50 before | paint p50 after | p99 before | p99 after |
+|---|---|---|---|---|---|---|
+| Single active | 0.55 ms | 0.45 ms | 0.43 ms | 0.39 ms | 4.43 ms | 10.32 ms |
+| Realistic 15 | 2.04 ms | 2.07 ms | 0.53 ms | 0.53 ms | 10.38 ms | 15.64 ms |
+| Stress, visible | 3.63 ms | 3.63 ms | 0.55 ms | 0.56 ms | 23.80 ms | 32.10 ms |
+| Stress, 14 hidden | 3.29 ms | 3.26 ms | 0.36 ms | 0.36 ms | 16.05 ms | 15.41 ms |
+
+Load average was **~10 during the "before" arm and ~23 during the "after" arm**, so the
+p99 columns are not comparable and are printed only so nobody re-derives them and thinks
+they were hidden.
+
+**What the A/B does establish:**
+
+- **`p50` is unmoved** — within 0.03 ms on three of four scenarios, and *faster* on the
+  fourth. `paint p50`, which is this client's own CPU and the only thing phase 7 could
+  have touched, is identical to two decimal places on three of four.
+- **The committed p99 numbers are not reproducible on this machine at any tree**, phase 7
+  or not: the pre-phase-7 baseline also missed the 16 ms budget (10.38 ms is inside it,
+  but `Stress, visible` at 23.80 ms is not). That is the load, not the code.
+- In both arms the p99 blowup is almost entirely in **`fetch`** — time spent waiting on
+  the daemon over the socket — which is the signature of a descheduled process, not of
+  work being done.
+
+**By construction there is nothing for a regression to come from.** With no panel open,
+`render()` gained one `this.branches !== null` null check and `statusContent()` one
+ternary. Every other change is in `git.*` RPCs, which the benchmark never calls.
+
+**Do not accept this as done.** Re-run `node bench/dist/render-scale.js --seconds 15` on
+a quiet machine — `uptime` first, and nothing else running, including the test suite —
+and commit the result. That instruction is now three handoffs old.
+
+## Surprises
+
+Things that contradicted a document or cost a wrong assumption first:
+
+- **PHASE-7's stated fix for its own defect 1 does not work**, and neither does
+  herdr-sidebar's, whose test for it is synthetic. Fully written up above. This is the
+  one thing in this handoff that changes what a reader believes.
+- **`reset -q HEAD -- <path>` exits 0 on an unborn branch** on git 2.54. The previous
+  handoff recorded that `restore --staged` fails there and that `reset` was chosen
+  because of it; what it did not record is that herdr's `rm --cached` fallback is
+  therefore dead code in our port.
+- **`%(HEAD)` in `for-each-ref` is `*` or a *single space*, never empty**, so the field
+  has to be trimmed before comparing. A real clone does carry a symbolic
+  `refs/remotes/origin/HEAD`, so the symref filter is not defensive — without it the
+  picker offers a branch called `origin` that checks out detached.
+- **A rebase conflict holds the dirty tree in the autostash and leaves it off disk.**
+  The work is not lost — `rebase --continue` or `--abort` brings it back — but "sync did
+  not lose your work" and "your edits are still in the file" are different claims, and
+  only the first is true mid-conflict. git's own hint block says which command restores
+  it, which is the argument for surfacing stderr verbatim.
+- **`key.char` is the *unshifted* codepoint.** `S` arrives as `{char: 's', MOD_SHIFT,
+  shiftedChar: 'S'}` (`input/src/parse-csi.ts:416`, deliberate, so a binding written `H`
+  fires under both the legacy and kitty protocols). The panels were being handed
+  `key.char` directly, so `s` and `S` were indistinguishable to them and the sync key
+  silently could not work. There is now one `App.typedChar(key)` and the prompt, the
+  picker and both panels share it.
+- **The Explorer clipped its errors where the panel wrapped them.** "nothing staged:
+  those paths belong to a nested repository, not this one" became "nothing staged: those
+  paths belong" in 34 columns — the half that names no reason. `wrapWords` moved from
+  `scm.ts` to `chrome.ts` (which both panels already import for `Palette`) and the
+  Explorer now wraps too. Found by a test failing for the wrong reason.
+- **Staging a file whose section header is the row above scrolls the header off.** See
+  **Types and contracts**. Not a `ScrollView` bug; a missing panel-level rule.
+- **`ScmPanel.clickRow` and `ExplorerPanel.clickRow` were dead code** — written in the
+  unphased slice, never called from `app.ts`. Both are live now via `handlePanelClick`,
+  which also gave the branch line its click (herdr-sidebar opens its picker that way and
+  has no key for it).
+
+## Open threads deliberately left
+
+- **Criterion 8.** Above. It is a machine, not a task.
+- **Picking `origin/x` when a local `x` already exists fails** with git's
+  `fatal: a branch named 'x' already exists`. herdr-sidebar behaves identically and the
+  message says exactly what to pick instead, so it was kept rather than papered over.
+  Deduping the picker, or falling back to `checkout x`, is the fix if it annoys anyone.
+- **`hash-object` does not apply `.gitattributes` filters.** A repository with
+  `text=auto` and CRLF working-tree content can hash differently from what `git add`
+  would store, so the rename pairing quietly does not fire. The failure mode is the old
+  behaviour, not a wrong stage. `--path` would fix it at the cost of one invocation per
+  file.
+- **Similarity-based rename detection is not attempted.** `git mv` followed by an edit
+  decomposes and stays decomposed. Exact content only, deliberately: a looser rule
+  stages work the user did not select.
+- **The panel does not poll.** A `git` command run in a pane behind it still needs `r`.
+  Same reason the daemon caches nothing; a watcher is a phase-9 conversation.
+- **No commit history, file history, stashes, tags or remotes browsing**, per the
+  phase's "Do NOT do" list. Also no search or quick open (phase 8), no preview, icons or
+  settings UI (phase 9), no AI commit drafting, no plugin host.
+- **`git.sync` has no timeout of its own.** It inherits `runGit`'s, which means a push
+  to an unreachable remote blocks that long. `DaemonClient` still has no request timeout
+  either — unchanged from phase 4.
+- **Multi-repo is not ported.** herdr-sidebar's `discover_all` finds child repositories
+  two levels down and gives each its own commit box; ours follows the focused pane into
+  exactly one repository. That is the right shape for a multiplexer where switching pane
+  switches repository, but it is a real difference from the source material.
+- **`client/test/multiplexer.test.ts` is still flaky** and still undiagnosed. Passes
+  alone; a different test fails each full run. Predates all sidebar work.
+- **Criterion 2 of phase 5 is still the important gap** — detection has never been
+  checked against a running agent, and three of six platform slots have never been
+  built. Nothing in phase 7 moved that.
 
 ## Getting started in a new session
 
 ```bash
 pnpm install
 pnpm build
-ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus   # or pnpm link --global
-pnpm test                                    # 893 tests; do not run anything alongside it
+ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus
+pnpm test                                    # 959 tests; do not run anything alongside it
 LEAP_CHORUS_DISABLE_SOUND=1 pnpm test        # the suite must not spawn afplay
-leap-chorus                                  # drive it yourself
-node scripts/build-app.mjs && node scripts/package-tarball.mjs --node-dir <node>
-sh scripts/smoke-tarball.sh dist-release/*.tar.gz
-node bench/dist/render-scale.js --seconds 15 # alone, or the numbers are fiction
+leap-chorus                                  # C-b g for source control, C-b e for the tree
+uptime && node bench/dist/render-scale.js --seconds 15   # alone, or the numbers are fiction
+pgrep -f leap-chorusd                        # a leaked daemon forks `ps` every 750 ms
 ```

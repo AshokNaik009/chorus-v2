@@ -514,6 +514,44 @@ export interface GitCommitParams extends GitTargetParams {
   readonly message: string
 }
 
+/**
+ * One entry in the branch picker.
+ *
+ * `name` is the short name git prints — `main` for a local branch, `origin/main` for a
+ * remote-tracking one — and `remote` says which, because checking one out is a
+ * different command: a remote name has to become a local tracking branch first.
+ */
+export interface GitBranch {
+  readonly name: string
+  readonly current: boolean
+  readonly remote: boolean
+}
+
+export interface GitBranchesResult {
+  readonly root: string
+  /** Most recently committed first, with the current branch rotated to the front. */
+  readonly branches: readonly GitBranch[]
+}
+
+export interface GitCheckoutParams extends GitTargetParams {
+  /** The short name, exactly as `git.branches` gave it. */
+  readonly branch: string
+  /** True when `branch` is remote-tracking, so a local branch is created to track it. */
+  readonly remote?: boolean
+}
+
+/**
+ * What a sync did, plus the status it left behind.
+ *
+ * The message is git's own output rather than a phrase of ours: a rebase that stopped
+ * on a conflict prints exactly which file and exactly which command continues it, and
+ * nothing this project could write would be more useful than that.
+ */
+export interface GitSyncResult {
+  readonly status: GitStatusResult
+  readonly message: string
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem (the explorer)
 // ---------------------------------------------------------------------------

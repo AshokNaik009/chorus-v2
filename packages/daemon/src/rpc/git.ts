@@ -7,11 +7,24 @@
  * clients watching the same repository would disagree in between.
  */
 
-import { ErrorCodes, type FsListResult, type GitStatusResult } from '@leap-chorus/protocol'
+import {
+  ErrorCodes,
+  type FsListResult,
+  type GitBranchesResult,
+  type GitStatusResult,
+  type GitSyncResult
+} from '@leap-chorus/protocol'
 import type { FsService } from '../fs.js'
 import { liveCwd } from '../cwd.js'
 import type { GitService, GitStatus } from '../git.js'
-import { RequestError, optionalString, optionalStringArray, requireString, type Params } from './params.js'
+import {
+  RequestError,
+  optionalBoolean,
+  optionalString,
+  optionalStringArray,
+  requireString,
+  type Params
+} from './params.js'
 
 export interface GitContext {
   readonly git: GitService
@@ -92,4 +105,24 @@ export async function gitDiscard(context: GitContext, params: Params): Promise<G
 export async function gitCommit(context: GitContext, params: Params): Promise<GitStatusResult> {
   const cwd = await resolveCwd(context, params)
   return wire(await context.git.commit(cwd, requireString(params, 'message')))
+}
+
+export async function gitBranches(context: GitContext, params: Params): Promise<GitBranchesResult> {
+  const { root, branches } = await context.git.branches(await resolveCwd(context, params))
+  return { root, branches }
+}
+
+export async function gitCheckout(context: GitContext, params: Params): Promise<GitStatusResult> {
+  const cwd = await resolveCwd(context, params)
+  // `remote` comes from the client rather than being re-derived from the name, because
+  // a local branch may legitimately be called `origin/thing` and guessing from the
+  // string would check out the wrong one of the two.
+  const remote = optionalBoolean(params, 'remote') ?? false
+  return wire(await context.git.checkout(cwd, requireString(params, 'branch'), remote))
+}
+
+/** Pull-rebase then push. The message is git's, which is the point — see `git.ts`. */
+export async function gitSync(context: GitContext, params: Params): Promise<GitSyncResult> {
+  const { status, message } = await context.git.sync(await resolveCwd(context, params))
+  return { status: wire(status), message }
 }

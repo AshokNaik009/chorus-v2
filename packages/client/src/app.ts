@@ -104,7 +104,8 @@ import {
 import { playSound, type SoundKind } from './sound.js'
 import { MIN_SCM_WIDTH, SCM_HINT, ScmPanel, renderScmPanel, type ScmOutcome } from './scm.js'
 import { EXPLORER_HINT, ExplorerPanel, type ExplorerOutcome } from './explorer.js'
-import type { FsListResult, GitStatusResult } from '@leap-chorus/protocol'
+import { BRANCH_HINT, BranchPicker, type BranchOutcome } from './branch.js'
+import type { FsListResult, GitBranchesResult, GitStatusResult, GitSyncResult } from '@leap-chorus/protocol'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
@@ -255,6 +256,13 @@ export class TuiApp {
   private scm: ScmPanel | null = null
   /** The file explorer, or null when it is closed. Shares the dock with the panel above. */
   private explorer: ExplorerPanel | null = null
+  /**
+   * The branch picker, or null when it is closed.
+   *
+   * An overlay rather than a mode of the panel: it is a choice you make and leave, and
+   * a 34-column dock is the wrong shape for a filtered list of `origin/feature/…`.
+   */
+  private branches: BranchPicker | null = null
   /** A pending destructive confirmation, or null. */
   private confirm: ConfirmDialog | null = null
   /** The divider being dragged, or null. See `handleDivider`. */
@@ -711,6 +719,22 @@ export class TuiApp {
     }
   }
 
+  /**
+   * The character a keystroke typed, or undefined when it typed none.
+   *
+   * `Key.char` is the **unshifted** codepoint by design — `S` arrives as `s` plus
+   * Shift, so that a binding written `H` fires under both the legacy and the kitty
+   * protocols (see `parse-csi.ts`). A panel that tells `s` from `S` has to undo that,
+   * and Alt-anything is a command rather than a character.
+   */
+  private typedChar(key: Key): string | undefined {
+    if (hasModifier(key.modifiers, MOD_ALT)) return undefined
+    return (
+      key.text ??
+      (hasModifier(key.modifiers, MOD_SHIFT) && key.shiftedChar !== undefined ? key.shiftedChar : key.char)
+    )
+  }
+
   private async handleKey(key: Key, bytes: Uint8Array): Promise<void> {
     // A prompt owns the keyboard while it is open: the point of typing a name is that
     // the letters do not also run commands or reach the pane.
@@ -726,6 +750,12 @@ export class TuiApp {
     // else is open, and it answers first.
     if (this.confirm !== null) {
       await this.resolveConfirm(this.confirm.handleKey(key.name))
+      return
+    }
+    // The picker is modal over the panel that opened it: every printable key is a
+    // filter character, so nothing below this can claim one.
+    if (this.branches !== null) {
+      await this.handleBranchKey(key)
       return
     }
     // A modal owns the keyboard, including the prefix: `C-b` inside settings should
@@ -749,11 +779,11 @@ export class TuiApp {
         return
       }
       if (this.explorer !== null) {
-        await this.applyExplorerOutcome(this.explorer.handleKey(key.name, key.char))
+        await this.applyExplorerOutcome(this.explorer.handleKey(key.name, this.typedChar(key)))
         return
       }
       if (this.scm !== null) {
-        await this.applyScmOutcome(this.scm.handleKey(key.name, key.char))
+        await this.applyScmOutcome(this.scm.handleKey(key.name, this.typedChar(key)))
         return
       }
     }
@@ -875,6 +905,19 @@ export class TuiApp {
       )
       return
     }
+    if (this.branches !== null) {
+      const area = this.branches.area(this.cols, this.rows)
+      if (mouse.kind === 'scrollup' || mouse.kind === 'scrolldown') return
+      if (mouse.kind !== 'down') return
+      if (!contains(area, mouse.column, mouse.row)) {
+        this.branches = null
+        this.requestRender()
+        return
+      }
+      await this.applyBranchOutcome(this.branches.handleClick(mouse.column, mouse.row, area))
+      return
+    }
+    if (await this.handlePanelClick(mouse)) return
     if (this.handleSidebarDrag(mouse)) return
     if (await this.handleDivider(mouse)) return
     if (this.trackHover(mouse)) return
@@ -1107,15 +1150,21 @@ export class TuiApp {
   private async handlePromptKey(key: Key): Promise<void> {
     const prompt = this.prompt
     if (prompt === null) return
-    const typed =
-      key.text ??
-      (hasModifier(key.modifiers, MOD_SHIFT) && key.shiftedChar !== undefined ? key.shiftedChar : key.char)
     const outcome = prompt.dialog.handleKey(
       key.name,
-      hasModifier(key.modifiers, MOD_ALT) ? undefined : typed,
+      this.typedChar(key),
       hasModifier(key.modifiers, MOD_CTRL)
     )
     await this.resolvePrompt(outcome)
+  }
+
+  /** The picker is a text field, so it reads modifiers the way the prompt does. */
+  private async handleBranchKey(key: Key): Promise<void> {
+    const picker = this.branches
+    if (picker === null) return
+    await this.applyBranchOutcome(
+      picker.handleKey(key.name, this.typedChar(key), hasModifier(key.modifiers, MOD_CTRL))
+    )
   }
 
   private async resolvePrompt(outcome: PromptOutcome): Promise<void> {
@@ -1461,7 +1510,7 @@ export class TuiApp {
    * belongs where you are looking.
    */
   private async callScm(
-    method: 'git.status' | 'git.stage' | 'git.unstage' | 'git.discard' | 'git.commit',
+    method: 'git.status' | 'git.stage' | 'git.unstage' | 'git.discard' | 'git.commit' | 'git.checkout',
     params: Record<string, unknown>
   ): Promise<void> {
     const panel = this.scm
@@ -1490,6 +1539,12 @@ export class TuiApp {
         return
       case 'refresh':
         await this.refreshScm()
+        return
+      case 'branches':
+        await this.openBranches()
+        return
+      case 'sync':
+        await this.syncScm()
         return
       case 'stage':
         if (paneId === null) return
@@ -1552,8 +1607,116 @@ export class TuiApp {
   private closePanels(): void {
     this.scm = null
     this.explorer = null
+    this.branches = null
     this.setStatus('')
     this.requestRender()
+  }
+
+  /**
+   * Open the branch picker over the Source Control panel.
+   *
+   * The branches are fetched here rather than held by the panel, for the reason the
+   * daemon holds no status either: a checkout in a pane the user is looking at changes
+   * them, and a list cached when the panel opened would offer a branch that has since
+   * been deleted.
+   */
+  private async openBranches(): Promise<void> {
+    const panel = this.scm
+    const paneId = this.scmPaneId()
+    if (panel === null || paneId === null) return
+    try {
+      const result = (await this.options.client.call('git.branches', { paneId } as never)) as GitBranchesResult
+      if (this.scm !== panel) return
+      if (result.branches.length === 0) {
+        panel.fail('no branches yet — this repository has no commits')
+      } else {
+        this.branches = new BranchPicker(result.branches)
+      }
+    } catch (error) {
+      if (this.scm === panel) panel.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  private async applyBranchOutcome(outcome: BranchOutcome): Promise<void> {
+    switch (outcome.kind) {
+      case 'none':
+        this.requestRender()
+        return
+      case 'close':
+        this.branches = null
+        this.requestRender()
+        return
+      case 'checkout': {
+        this.branches = null
+        const paneId = this.scmPaneId()
+        if (paneId === null) return
+        // `git.checkout` returns the status on the new branch, so adopting it is what
+        // updates the panel's branch line — there is no second call and no refresh.
+        await this.callScm('git.checkout', {
+          paneId,
+          branch: outcome.branch.name,
+          remote: outcome.branch.remote
+        })
+        // The tree's decorations are about the old branch's working tree until now.
+        await this.refreshExplorerStatus()
+        return
+      }
+    }
+  }
+
+  /**
+   * Sync, and say what git said.
+   *
+   * Not routed through `callScm`, because this is the one source-control call whose
+   * *success* has something to report: which commits moved, or that there was nothing
+   * to do. A failure still lands in the panel as an error, which is where a rebase
+   * conflict has to appear — see `git.ts` for why push never runs after one.
+   */
+  private async syncScm(): Promise<void> {
+    const panel = this.scm
+    const paneId = this.scmPaneId()
+    if (panel === null || paneId === null) return
+    panel.report('syncing…')
+    this.requestRender()
+    try {
+      const result = (await this.options.client.call('git.sync', { paneId } as never)) as GitSyncResult
+      if (this.scm !== panel) return
+      panel.adopt(result.status)
+      panel.report(result.message)
+    } catch (error) {
+      if (this.scm === panel) panel.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /**
+   * A click in the docked panel.
+   *
+   * Returns true once it has been handled, so the event does not carry on to a pane
+   * underneath — the panel occupies the sidebar's columns and nothing is behind it.
+   */
+  private async handlePanelClick(mouse: MouseEvent): Promise<boolean> {
+    const sidebar = this.sidebarArea()
+    if (sidebar === null) return false
+    if (!contains(sidebar, mouse.column, mouse.row)) return false
+    const panel = this.scm
+    const tree = this.explorer
+    if (panel === null && tree === null) return false
+    if (mouse.kind === 'scrollup' || mouse.kind === 'scrolldown') {
+      const delta = mouse.kind === 'scrollup' ? -3 : 3
+      if (panel !== null) panel.scrollBy(delta, sidebar)
+      if (tree !== null) tree.scrollBy(delta, sidebar)
+      this.requestRender()
+      return true
+    }
+    if (mouse.kind !== 'down') return true
+    if (panel !== null) {
+      await this.applyScmOutcome(panel.handleClick(mouse.row, sidebar))
+      return true
+    }
+    if (tree !== null && tree.clickRow(mouse.row, sidebar)) this.requestRender()
+    return true
   }
 
   private async openScm(): Promise<void> {
@@ -1623,6 +1786,24 @@ export class TuiApp {
       case 'expand':
         await this.listExplorer(outcome.path)
         return
+      case 'stage': {
+        const paneId = this.scmPaneId()
+        if (paneId === null) return
+        // Straight to the client, not through `this.call`: a stage that crossed into a
+        // nested repository has a reason worth reading, and the status bar is showing
+        // the tree's key hints while the Explorer is open.
+        try {
+          panel.status = (await this.options.client.call('git.stage', {
+            paneId,
+            paths: [outcome.path]
+          } as never)) as GitStatusResult
+          panel.error = null
+        } catch (error) {
+          panel.fail(messageOf(error))
+        }
+        this.requestRender()
+        return
+      }
       case 'open': {
         // Opened in a pane with the user's own pager, for the same reason a diff is:
         // this is a multiplexer, and the tool for looking at a file is already installed.
@@ -2176,6 +2357,15 @@ export class TuiApp {
         })
         this.menu.menu.render(this.back, area, this.palette)
       }
+      if (this.branches !== null) {
+        const area = this.branches.area(this.cols, this.rows)
+        renderBlock(this.back, area, {
+          borders: BORDER_ALL,
+          chars: PLAIN_BORDER,
+          borderStyle: this.palette.focusBorder
+        })
+        this.branches.render(this.back, area, this.palette)
+      }
       if (this.confirm !== null) {
         const area = confirmArea(this.cols, this.rows)
         renderBlock(this.back, area, {
@@ -2275,10 +2465,12 @@ export class TuiApp {
       .join('  ')
     const right = this.prefixArmed
       ? 'PREFIX'
-      : this.explorer !== null
-        ? EXPLORER_HINT
-        : this.scm !== null
-          ? SCM_HINT
+      : this.branches !== null
+        ? BRANCH_HINT
+        : this.explorer !== null
+          ? EXPLORER_HINT
+          : this.scm !== null
+            ? SCM_HINT
       : this.status.length > 0
         ? this.status
         : `${describeChord(this.config.keys.prefix)} ? · menu for keys`

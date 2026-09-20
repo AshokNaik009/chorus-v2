@@ -159,3 +159,86 @@ describe('the file explorer', () => {
     await tui.waitForText('back-to-shell')
   })
 })
+
+/**
+ * PHASE-7 criterion 7: staging from the tree.
+ *
+ * A directory is a thing you can point at here and cannot in the changes list, which is
+ * why staging lives in both panels. The boundary case is the one that matters: `git add
+ * -- vendor` with an unregistered repository inside it records a **gitlink** — a single
+ * index entry naming a commit, in a repository with no submodule config to resolve it.
+ * The daemon enumerates the paths instead; see `drop_nested` in herdr-sidebar's
+ * `git.rs`, and `nestedRootsFor` in ours.
+ */
+describe('staging from the explorer', () => {
+  function staged(root: string): string[] {
+    const out = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' })
+    return out.split('\n').filter((line) => line.length > 0).sort()
+  }
+
+  it('stages one file on s, and marks it staged in the tree', async () => {
+    const root = makeRepo()
+    writeFileSync(join(root, 'README.md'), '# edited\n')
+    const tui = await openExplorer(root)
+    await tui.waitForText('README.md')
+    // src/ sorts first; one step down lands on README.md.
+    tui.write('j')
+    tui.write('s')
+
+    await tui.waitForScreen(() => staged(root).length > 0, 'the file was never staged')
+    expect(staged(root)).toEqual(['README.md'])
+  })
+
+  it('stages every changed file under a directory, and nothing beside it', async () => {
+    const root = makeRepo()
+    writeFileSync(join(root, 'src/app.ts'), 'edited\n')
+    writeFileSync(join(root, 'src/added.ts'), 'new\n')
+    writeFileSync(join(root, 'README.md'), '# edited\n')
+
+    const tui = await openExplorer(root)
+    await tui.waitForText('src/')
+    tui.write('s')
+
+    await tui.waitForScreen(() => staged(root).length > 0, 'the directory was never staged')
+    expect(staged(root)).toEqual(['src/added.ts', 'src/app.ts'])
+  })
+
+  it('does not cross into a nested repository, and says why when that is all there was', async () => {
+    const root = makeRepo()
+    mkdirSync(join(root, 'vendor'))
+    writeFileSync(join(root, 'vendor/own.ts'), 'mine\n')
+    const inner = join(root, 'vendor/inner')
+    mkdirSync(inner)
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: inner, stdio: 'pipe' })
+    writeFileSync(join(inner, 'theirs.ts'), 'theirs\n')
+
+    const tui = await openExplorer(root)
+    await tui.waitForText('vendor/')
+    // src/ then vendor/, both directories, before the files.
+    tui.write('j')
+    tui.write('s')
+
+    await tui.waitForScreen(() => staged(root).length > 0, 'the directory was never staged')
+    expect(staged(root)).toEqual(['vendor/own.ts'])
+    // The gitlink git would have recorded for the inner repository is not in the index.
+    expect(staged(root)).not.toContain('vendor/inner')
+  })
+
+  it('reports a stage that was entirely inside a nested repository', async () => {
+    const root = makeRepo()
+    const inner = join(root, 'inner')
+    mkdirSync(inner)
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: inner, stdio: 'pipe' })
+    writeFileSync(join(inner, 'theirs.ts'), 'theirs\n')
+
+    const tui = await openExplorer(root)
+    await tui.waitForText('inner/')
+    tui.write('s')
+
+    await tui.waitForScreen(
+      (screen) => panelLines(screen).join(' ').includes('nested repository'),
+      'the panel never said why nothing was staged'
+    )
+    expect(staged(root)).toEqual([])
+  })
+})

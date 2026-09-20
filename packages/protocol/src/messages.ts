@@ -59,10 +59,13 @@ import type {
   WorktreeListParams,
   FsListParams,
   FsListResult,
+  GitBranchesResult,
+  GitCheckoutParams,
   GitCommitParams,
   GitPathsParams,
   GitStatusParams,
   GitStatusResult,
+  GitSyncResult,
   WorktreeListResult,
   WorktreeOpenParams,
   WorktreeOpenResult,
@@ -417,6 +420,9 @@ export interface AgentMethodMap {
   'git.unstage': { params: GitPathsParams; result: GitStatusResult }
   'git.discard': { params: GitPathsParams; result: GitStatusResult }
   'git.commit': { params: GitCommitParams; result: GitStatusResult }
+  'git.branches': { params: GitStatusParams; result: GitBranchesResult }
+  'git.checkout': { params: GitCheckoutParams; result: GitStatusResult }
+  'git.sync': { params: GitStatusParams; result: GitSyncResult }
 
   'worktree.list': { params: WorktreeListParams; result: WorktreeListResult }
   'worktree.create': { params: WorktreeCreateParams; result: WorktreeCreateResult }
@@ -441,6 +447,9 @@ export const AGENT_METHODS = [
   'git.unstage',
   'git.discard',
   'git.commit',
+  'git.branches',
+  'git.checkout',
+  'git.sync',
   'worktree.list',
   'worktree.create',
   'worktree.open',

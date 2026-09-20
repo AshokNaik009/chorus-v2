@@ -22,7 +22,8 @@
 
 import { ScreenBuffer, type Rect } from '@leap-chorus/tui'
 import type { FsEntry, GitStatusResult } from '@leap-chorus/protocol'
-import type { Palette } from './chrome.js'
+import { wrapWords, type Palette } from './chrome.js'
+import { ScrollView, needsScrollbar, renderScrollbar } from './scrollview.js'
 
 export interface TreeNode {
   /** Repo-relative. `''` is the root, which is never drawn as a row. */
@@ -48,6 +49,12 @@ export type ExplorerOutcome =
   /** Load this directory's children; the app calls `adopt` when they arrive. */
   | { readonly kind: 'expand'; readonly path: string }
   | { readonly kind: 'open'; readonly path: string }
+  /**
+   * Stage this path. A directory stages the files beneath it — the daemon enumerates
+   * them rather than handing the directory to `git add`, which is what keeps a nested
+   * repository from being recorded as a gitlink. See `git.ts`.
+   */
+  | { readonly kind: 'stage'; readonly path: string }
 
 /**
  * Keep the old node wherever the new listing has the same path and kind.
@@ -85,7 +92,7 @@ export class ExplorerPanel {
   status: GitStatusResult | null = null
   showHidden = false
   private cursor = 0
-  private scroll = 0
+  private readonly view = new ScrollView()
 
   /**
    * Take a listing for `path`.
@@ -157,22 +164,6 @@ export class ExplorerPanel {
     this.cursor = Math.min(Math.max(this.cursor, 0), count - 1)
   }
 
-  /**
-   * Scroll so the cursor is on screen, moving as little as possible.
-   *
-   * Called at render rather than on each keystroke, because the height is the renderer's
-   * to know and a panel that has not been drawn yet has none.
-   */
-  private syncScroll(height: number): void {
-    const count = this.rows().length
-    if (height <= 0 || count === 0) {
-      this.scroll = 0
-      return
-    }
-    if (this.cursor < this.scroll) this.scroll = this.cursor
-    if (this.cursor >= this.scroll + height) this.scroll = this.cursor - height + 1
-    this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, count - height)))
-  }
 
   handleKey(name: string, char: string | undefined): ExplorerOutcome {
     if (name === 'escape') return { kind: 'close' }
@@ -195,6 +186,12 @@ export class ExplorerPanel {
         return { kind: 'close' }
       case 'r':
         return { kind: 'refresh' }
+      case 's': {
+        // The Explorer's one write. It is here rather than only in the panel because
+        // the tree is where a *directory* is a thing you can point at.
+        const node = this.selected()
+        return node === null ? { kind: 'none' } : { kind: 'stage', path: node.path }
+      }
       case '.':
         this.showHidden = !this.showHidden
         this.clampCursor()
@@ -245,10 +242,15 @@ export class ExplorerPanel {
 
   /** Put the cursor on a clicked row. Returns whether it landed on one. */
   clickRow(screenRow: number, area: Rect): boolean {
-    const index = this.scroll + (screenRow - (area.y + LIST_TOP))
-    if (index < 0 || index >= this.rows().length) return false
+    const index = this.view.indexAt(screenRow, area.y + LIST_TOP, this.rows().length, area.height - LIST_TOP)
+    if (index === null) return false
     this.cursor = index
     return true
+  }
+
+  /** Scroll without moving the cursor. The next keystroke pulls the view back to it. */
+  scrollBy(delta: number, area: Rect): void {
+    this.view.by(delta, this.rows().length, Math.max(0, area.height - LIST_TOP))
   }
 
   /**
@@ -282,7 +284,14 @@ export class ExplorerPanel {
     )
 
     if (this.error !== null) {
-      buffer.writeString(area.x, area.y + LIST_TOP, clip(this.error, area.width), palette.agent['blocked'] ?? palette.sidebar, right)
+      // Wrapped, not clipped: a stage that stopped at a nested repository says so in a
+      // sentence, and thirty-four columns of it is the half that names no reason.
+      let y = area.y + LIST_TOP
+      for (const line of wrapWords(this.error, area.width)) {
+        if (y >= area.y + area.height) break
+        buffer.writeString(area.x, y, line, palette.agent['blocked'] ?? palette.sidebar, right)
+        y += 1
+      }
       return
     }
     const rows = this.rows()
@@ -295,12 +304,14 @@ export class ExplorerPanel {
       return
     }
 
-    this.syncScroll(height)
+    const bar = needsScrollbar(rows.length, height)
+    const room = area.width - (bar ? 1 : 0)
+    const offset = this.view.follow(this.cursor, rows.length, height)
     let y = area.y + LIST_TOP
-    for (const row of rows.slice(this.scroll, this.scroll + height)) {
+    for (const row of rows.slice(offset, offset + height)) {
       const isSelected = rows[this.cursor]?.node === row.node
       const rowStyle = isSelected ? palette.sidebarActive : palette.sidebar
-      buffer.fill({ x: area.x, y, width: area.width, height: 1 }, ' ', rowStyle)
+      buffer.fill({ x: area.x, y, width: room, height: 1 }, ' ', rowStyle)
 
       // `>` folded, `v` open, two spaces for a file: the marker column is always there
       // so names line up whatever a row happens to be.
@@ -309,11 +320,11 @@ export class ExplorerPanel {
       const name = row.node.kind === 'dir' ? `${row.node.name}/` : row.node.name
       const letter = this.decoration(row.node.path, row.node.kind)
       // The letter is pinned to the right edge, so the eye reads one column of them.
-      const room = area.width - (letter === null ? 0 : 2)
-      buffer.writeString(area.x, y, clip(`${indent}${marker}${name}`, room), rowStyle, right)
+      const space = room - (letter === null ? 0 : 2)
+      buffer.writeString(area.x, y, clip(`${indent}${marker}${name}`, space), rowStyle, right)
       if (letter !== null) {
         buffer.writeString(
-          area.x + area.width - 1,
+          area.x + room - 1,
           y,
           letter,
           isSelected ? rowStyle : letterStyle(letter, palette),
@@ -321,6 +332,15 @@ export class ExplorerPanel {
         )
       }
       y += 1
+    }
+    if (bar) {
+      renderScrollbar(
+        buffer,
+        { x: area.x + area.width - 1, y: area.y + LIST_TOP, width: 1, height },
+        offset,
+        rows.length,
+        palette
+      )
     }
   }
 }
@@ -343,4 +363,5 @@ function letterStyle(letter: string, palette: Palette) {
   return palette.agent['working'] ?? palette.sidebar
 }
 
-export const EXPLORER_HINT = '↑↓ move · ⏎ open · h/l fold · . hidden · r refresh · 2 source control · esc close'
+export const EXPLORER_HINT =
+  '↑↓ move · ⏎ open · h/l fold · s stage · . hidden · r refresh · 2 source control · esc close'

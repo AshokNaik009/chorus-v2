@@ -22,7 +22,8 @@
 
 import { ScreenBuffer, truncate, type Rect } from '@leap-chorus/tui'
 import type { GitFileEntry, GitStatusResult } from '@leap-chorus/protocol'
-import type { Palette } from './chrome.js'
+import { wrapWords, type Palette } from './chrome.js'
+import { ScrollView, needsScrollbar, renderScrollbar } from './scrollview.js'
 
 /** Narrower than this and a path is a column of truncation, not a filename. */
 export const MIN_SCM_WIDTH = 34
@@ -37,6 +38,9 @@ export type ScmOutcome =
   | { readonly kind: 'discard'; readonly paths: readonly string[]; readonly untracked: number }
   | { readonly kind: 'commit' }
   | { readonly kind: 'diff'; readonly path: string; readonly staged: boolean }
+  /** Open the branch picker. The app fetches the branches; the panel holds none. */
+  | { readonly kind: 'branches' }
+  | { readonly kind: 'sync' }
 
 /** A row in the flattened list: a section header, or a file on one side of the index. */
 interface Row {
@@ -50,7 +54,10 @@ export class ScmPanel {
   status: GitStatusResult | null = null
   /** Why the last call failed, shown in place of the list. */
   error: string | null = null
+  /** What the last sync said, in git's words. Cleared by the next thing that happens. */
+  note: string | null = null
   private cursor = 0
+  private readonly view = new ScrollView()
 
   /**
    * Adopt a new status, keeping the cursor on the same *file* where possible.
@@ -63,6 +70,9 @@ export class ScmPanel {
     const previous = this.selected()
     this.status = status
     this.error = null
+    // A note describes the call that produced it. Carrying it onto the next status
+    // would leave "synced with remote" sitting above a list that has moved on.
+    this.note = null
     if (previous === null) {
       this.clampCursor()
       return
@@ -79,6 +89,13 @@ export class ScmPanel {
 
   fail(message: string): void {
     this.error = message
+    this.note = null
+  }
+
+  /** Report something that worked — what a sync did. Not an error, so the list stays. */
+  report(message: string): void {
+    this.note = message
+    this.error = null
   }
 
   /** The flattened list, headers included, in display order. */
@@ -135,14 +152,50 @@ export class ScmPanel {
     }
   }
 
-  /** Put the cursor on the row at screen `row`, if it is a file. Returns whether it moved. */
-  clickRow(row: number, area: Rect): boolean {
-    const index = row - (area.y + LIST_TOP)
+  /**
+   * A click in the panel.
+   *
+   * The branch line is a button, which is how herdr-sidebar opens its picker. Below it,
+   * a click lands on a file row — through the viewport's offset, so what is clicked is
+   * what was drawn rather than the row that would have been there with no scrolling.
+   */
+  handleClick(row: number, area: Rect): ScmOutcome {
+    if (row === area.y && this.status !== null) return { kind: 'branches' }
     const rows = this.rows()
-    if (index < 0 || index >= rows.length) return false
-    if (rows[index]?.kind !== 'file') return false
+    const index = this.view.indexAt(row, area.y + LIST_TOP, rows.length, this.listHeight(area))
+    if (index === null || rows[index]?.kind !== 'file') return { kind: 'none' }
     this.cursor = index
-    return true
+    return { kind: 'none' }
+  }
+
+  /** Scroll without moving the cursor. The next keystroke pulls the view back to it. */
+  scrollBy(delta: number, area: Rect): void {
+    this.view.by(delta, this.rows().length, this.listHeight(area))
+  }
+
+  private listHeight(area: Rect): number {
+    return Math.max(0, area.height - LIST_TOP)
+  }
+
+  /**
+   * Put the cursor in view and say where the list now starts.
+   *
+   * Called by the renderer, because the height is the renderer's to know. That is the
+   * same arrangement `explorer.ts` already had; the whole point of this phase's
+   * `ScrollView` is that there is now one of them instead of one and a half.
+   */
+  follow(height: number): number {
+    const rows = this.rows()
+    const offset = this.view.follow(this.cursor, rows.length, height)
+    // A header is a label for the rows under it, so it comes along when the cursor lands
+    // on the first of them. Without this, staging a file scrolls the view to the file's
+    // new position and leaves "Staged Changes (1)" one row above the top — which reads
+    // as the file having moved into nothing.
+    if (offset === this.cursor && height > 1 && rows[this.cursor - 1]?.kind === 'header') {
+      this.view.offset = offset - 1
+      return this.view.offset
+    }
+    return offset
   }
 
   handleKey(name: string, char: string | undefined): ScmOutcome {
@@ -165,8 +218,15 @@ export class ScmPanel {
         this.move(1)
         return { kind: 'none' }
       case 'q':
-      case 'b':
         return { kind: 'close' }
+      case 'b':
+        // `b` used to be a second `q`. It is the branch line's key now, which is worth
+        // more: closing already has escape and `q`, and switching branch had nothing.
+        return { kind: 'branches' }
+      case 'S':
+        // Capitalised, as in herdr-sidebar. Sync talks to the remote and can rebase, so
+        // it is the one action here that should not be one relaxed finger away.
+        return { kind: 'sync' }
       case 'r':
         return { kind: 'refresh' }
       case 'a':
@@ -216,34 +276,6 @@ export class ScmPanel {
   }
 }
 
-/**
- * Break `text` onto lines of at most `width`, on spaces where possible.
- *
- * A word longer than the whole width — a path, usually — is hard-split rather than
- * dropped, so the line count is bounded and nothing disappears.
- */
-function wrapWords(text: string, width: number): string[] {
-  if (width <= 0) return []
-  const lines: string[] = []
-  let line = ''
-  for (const word of text.split(/\s+/).filter((part) => part.length > 0)) {
-    if (line.length === 0) {
-      line = word
-    } else if (line.length + 1 + word.length <= width) {
-      line = `${line} ${word}`
-    } else {
-      lines.push(line)
-      line = word
-    }
-    while (line.length > width) {
-      lines.push(line.slice(0, width))
-      line = line.slice(width)
-    }
-  }
-  if (line.length > 0) lines.push(line)
-  return lines
-}
-
 /** Rows above the file list: the branch line and a blank. */
 const LIST_TOP = 2
 
@@ -280,6 +312,12 @@ export function renderScmPanel(
     right
   )
 
+  // Under the branch line: what the last remote operation said. Truncated rather than
+  // wrapped, unlike an error — this one leads with its conclusion.
+  if (panel.note !== null) {
+    buffer.writeString(area.x, area.y + 1, truncate(panel.note, area.width), palette.agent['idle'] ?? palette.sidebar, right)
+  }
+
   if (panel.error !== null) {
     // Wrapped, not truncated. Git's own messages lead with the path — "/very/long/dir
     // is not inside a git repository" — so a single truncated line shows the directory
@@ -304,12 +342,17 @@ export function renderScmPanel(
   }
 
   const selected = panel.selected()
-  const limit = area.y + area.height
+  const height = Math.max(0, area.height - LIST_TOP)
+  // A bar takes the last column, and only when there is something to scroll. Reserving
+  // it unconditionally would steal a column of filename from every panel that fits.
+  const bar = needsScrollbar(rows.length, height)
+  const room = area.width - (bar ? 1 : 0)
+  const offset = panel.follow(height)
+
   let y = area.y + LIST_TOP
-  for (const row of rows) {
-    if (y >= limit) break
+  for (const row of rows.slice(offset, offset + height)) {
     if (row.kind === 'header') {
-      buffer.writeString(area.x, y, truncate(row.text, area.width), palette.paneTitle, right)
+      buffer.writeString(area.x, y, truncate(row.text, room), palette.paneTitle, right)
       y += 1
       continue
     }
@@ -318,16 +361,26 @@ export function renderScmPanel(
     const rowStyle = isSelected && focused ? palette.sidebarActive : palette.sidebar
     // The whole row takes the selection background, so the eye follows a band rather
     // than a single highlighted character.
-    buffer.fill({ x: area.x, y, width: area.width, height: 1 }, ' ', rowStyle)
+    buffer.fill({ x: area.x, y, width: room, height: 1 }, ' ', rowStyle)
     // The path is shown tail-first when it does not fit: `…/deep/file.ts` says more
     // than `packages/client/sr…`.
-    const room = area.width - 4
-    const shown = entry.path.length > room ? `…${entry.path.slice(entry.path.length - room + 1)}` : entry.path
-    buffer.writeString(area.x + 2, y, shown, rowStyle, right)
+    const space = room - 4
+    const shown = entry.path.length > space ? `…${entry.path.slice(entry.path.length - space + 1)}` : entry.path
+    buffer.writeString(area.x + 2, y, shown, rowStyle, area.x + room)
     buffer.writeString(area.x, y, entry.letter, isSelected && focused ? rowStyle : letterStyle(entry.letter, palette), right)
     y += 1
+  }
+  if (bar) {
+    renderScrollbar(
+      buffer,
+      { x: area.x + area.width - 1, y: area.y + LIST_TOP, width: 1, height },
+      offset,
+      rows.length,
+      palette
+    )
   }
 }
 
 /** The one-line hint for the status bar while the panel has the keyboard. */
-export const SCM_HINT = '↑↓ move · ⏎ stage/unstage · a/u all · c commit · d discard · o diff · r refresh · esc close'
+export const SCM_HINT =
+  '↑↓ move · ⏎ stage/unstage · a/u all · c commit · d discard · o diff · b branch · S sync · r refresh · esc close'
