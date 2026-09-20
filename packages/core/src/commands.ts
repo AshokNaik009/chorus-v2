@@ -50,6 +50,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'workspace.create', summary: 'Create a workspace', scope: 'session' },
   { name: 'workspace.rename', summary: 'Rename the active workspace', scope: 'session' },
   { name: 'client.settings', summary: 'Open settings: theme and agent integrations', scope: 'client' },
+  { name: 'client.source-control', summary: 'Open the source control panel', scope: 'client' },
   { name: 'tab.rename', summary: 'Rename the active tab', scope: 'session' },
   { name: 'workspace.close', summary: 'Close the active workspace', scope: 'session' },
   { name: 'workspace.next', summary: 'Focus the next workspace', scope: 'session' },

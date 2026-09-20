@@ -118,6 +118,32 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 If clicks do nothing, the terminal is not forwarding them: macOS Terminal.app needs
 *View → Allow Mouse Reporting*, and an outer multiplexer will eat them first.
 
+## Source control
+
+`Ctrl-B g` opens a Source Control panel docked where the sidebar sits, for the
+repository of whatever pane has focus — so with a fleet of agents in separate
+worktrees, switching pane switches repository with nothing to configure.
+
+| Key | Action |
+|---|---|
+| `↑↓` / `j k` | move |
+| `Enter` | stage or unstage the file under the cursor |
+| `a` / `u` | stage everything / unstage everything |
+| `c` | commit what is staged |
+| `d` | discard the file under the cursor (asks first) |
+| `o` | open its diff in a new pane |
+| `r` | refresh |
+| `Esc` / `b` / `q` | close |
+
+The panel takes the keyboard while it is open — `d` has to mean discard, not a
+keystroke for the shell behind it — and `Esc` hands it back. `Ctrl-B` still reaches
+the multiplexer from inside.
+
+Discard distinguishes the two cases it covers, because only one is recoverable: a
+tracked file is restored from the index, an untracked one is deleted. The
+confirmation says which. Diffs open in a pane running `git diff`, so they go through
+whatever pager you already configured — delta, less, anything.
+
 ## Controlling panes from a script
 
 Anything the TUI does to a pane, the CLI can do without a terminal attached — for a

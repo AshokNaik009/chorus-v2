@@ -102,6 +102,8 @@ import {
   type PromptOutcome
 } from './prompt.js'
 import { playSound, type SoundKind } from './sound.js'
+import { MIN_SCM_WIDTH, SCM_HINT, ScmPanel, renderScmPanel, type ScmOutcome } from './scm.js'
+import type { GitStatusResult } from '@leap-chorus/protocol'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
@@ -226,8 +228,12 @@ export class TuiApp {
    * the answer is that a one-line prompt is enough for a one-line answer, and a modal
    * would be a box drawn around a text field.
    */
-  private prompt: { dialog: PromptDialog; kind: 'workspace' | 'tab' | 'pane' | 'new-tab'; id: string } | null =
-    null
+  private prompt: {
+    dialog: PromptDialog
+    kind: 'workspace' | 'tab' | 'pane' | 'new-tab' | 'commit'
+    /** The subject: an id, the seeded tab number, or the repository for a commit. */
+    id: string
+  } | null = null
   /**
    * An open popup menu, or null.
    *
@@ -238,6 +244,14 @@ export class TuiApp {
   private menu: { menu: ContextMenu; choose(id: string): Promise<void> } | null = null
   /** The settings dialog, or null when it is closed. */
   private settings: SettingsDialog | null = null
+  /**
+   * The source-control panel, or null when it is closed.
+   *
+   * Docked where the sidebar goes rather than floating, because it is something you
+   * work *beside* — a modal covering the panes would defeat the point of seeing the
+   * diff and the code at once.
+   */
+  private scm: ScmPanel | null = null
   /** A pending destructive confirmation, or null. */
   private confirm: ConfirmDialog | null = null
   /** The divider being dragged, or null. See `handleDivider`. */
@@ -542,7 +556,9 @@ export class TuiApp {
     if (this.sidebarMode === 'rail') {
       return { x: 0, y: 0, width: RAIL_WIDTH, height: Math.max(0, this.rows - this.statusRows()) }
     }
-    const wanted = this.sidebarWidthOverride ?? this.config.ui.sidebarWidth
+    // The panel needs room a workspace list does not: a path plus its status letter.
+    const configured = this.sidebarWidthOverride ?? this.config.ui.sidebarWidth
+    const wanted = this.scm !== null ? Math.max(configured, MIN_SCM_WIDTH) : configured
     const width = Math.max(MIN_SIDEBAR_WIDTH, Math.min(wanted, Math.floor(this.cols / 3)))
     return { x: 0, y: 0, width, height: Math.max(0, this.rows - this.statusRows()) }
   }
@@ -713,6 +729,13 @@ export class TuiApp {
     // not arm a command that acts on the session behind the dialog.
     if (this.settings !== null) {
       await this.applySettingsOutcome(this.settings.handleKey(key.name, key.char))
+      return
+    }
+    // The panel owns the keyboard while it is open, for the reason scm.ts gives: `d`
+    // discards a file here and is an ordinary keystroke to the shell behind it. The
+    // prefix still wins, so `C-b` reaches the multiplexer from inside the panel.
+    if (this.scm !== null && !this.prefixArmed && !isPrefix(this.keymap, key)) {
+      await this.applyScmOutcome(this.scm.handleKey(key.name, key.char))
       return
     }
     if (this.prefixArmed) {
@@ -1087,6 +1110,10 @@ export class TuiApp {
     // Cancelling a `new-tab` prompt creates nothing. That is the whole reason the tab
     // is made here and not before the dialog opens: an escape must leave no trace.
     if (outcome.kind === 'cancelled') return
+    if (prompt.kind === 'commit') {
+      await this.callScm('git.commit', { cwd: prompt.id, message: outcome.value })
+      return
+    }
     if (prompt.kind === 'new-tab') {
       // An unchanged or empty answer means "no label", so the tab falls back to its
       // number — which is exactly what the field was showing as a placeholder.
@@ -1369,6 +1396,132 @@ export class TuiApp {
     // The bell is the fallback, not the mechanism: a machine with no audio player at
     // all still gets whatever its terminal does with `\x07`.
     if (!playSound(kind, custom)) this.options.write('\u0007')
+  }
+
+
+  // -------------------------------------------------------------------------
+  // Source control
+  // -------------------------------------------------------------------------
+
+  /**
+   * The repository the panel is looking at: the focused pane's working directory.
+   *
+   * Following the focused pane rather than remembering a folder is what makes the panel
+   * useful with a fleet of agents, each in its own worktree — switching pane switches
+   * repository, with nothing to configure.
+   */
+  private scmCwd(): string | null {
+    const pane = paneById(this.state, this.state.focusedPaneId)
+    return pane === null || pane.cwd.length === 0 ? null : pane.cwd
+  }
+
+  /** Re-read the status. Every mutation returns one, so this is only for open and `r`. */
+  private async refreshScm(): Promise<void> {
+    const panel = this.scm
+    if (panel === null) return
+    const cwd = this.scmCwd()
+    if (cwd === null) {
+      panel.fail('no working directory')
+      this.requestRender()
+      return
+    }
+    await this.callScm('git.status', { cwd })
+  }
+
+  /**
+   * Run one source-control call and adopt the status it returns.
+   *
+   * Goes to the client directly rather than through `this.call`, which catches and
+   * routes the message to the status bar. That is right for a pane action and wrong
+   * here twice over: the panel would sit on "loading…" forever, and the status bar is
+   * showing the panel's own key hints while it is open, so the message would never be
+   * seen at all. "not inside a git repository" is about the thing being looked at and
+   * belongs where you are looking.
+   */
+  private async callScm(
+    method: 'git.status' | 'git.stage' | 'git.unstage' | 'git.discard' | 'git.commit',
+    params: Record<string, unknown>
+  ): Promise<void> {
+    const panel = this.scm
+    if (panel === null) return
+    try {
+      const status = (await this.options.client.call(method, params as never)) as GitStatusResult
+      if (this.scm === panel) panel.adopt(status)
+    } catch (error) {
+      if (this.scm === panel) panel.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  private async applyScmOutcome(outcome: ScmOutcome): Promise<void> {
+    const panel = this.scm
+    if (panel === null) return
+    const cwd = this.scmCwd()
+    switch (outcome.kind) {
+      case 'none':
+        this.requestRender()
+        return
+      case 'close':
+        this.scm = null
+        this.setStatus('')
+        this.requestRender()
+        return
+      case 'refresh':
+        await this.refreshScm()
+        return
+      case 'stage':
+        if (cwd === null) return
+        await this.callScm('git.stage', { cwd, paths: [...outcome.paths] })
+        return
+      case 'unstage':
+        if (cwd === null) return
+        await this.callScm('git.unstage', { cwd, paths: [...outcome.paths] })
+        return
+      case 'discard': {
+        if (cwd === null) return
+        const [path] = outcome.paths
+        if (path === undefined) return
+        // The wording distinguishes the two outcomes, because only one of them is
+        // recoverable: an untracked file is deleted, with no version to restore.
+        this.askConfirm(
+          outcome.untracked > 0 ? 'Delete this file?' : 'Discard changes?',
+          outcome.untracked > 0 ? `${path} is untracked and will be deleted` : `${path} will be restored from the index`,
+          async () => {
+            await this.callScm('git.discard', { cwd, paths: [path] })
+          }
+        )
+        this.requestRender()
+        return
+      }
+      case 'commit': {
+        if (cwd === null) return
+        if (panel.status === null || panel.status.staged.length === 0) {
+          panel.fail('nothing staged to commit')
+          this.requestRender()
+          return
+        }
+        this.prompt = { dialog: new PromptDialog('commit message', ''), kind: 'commit', id: cwd }
+        this.requestRender()
+        return
+      }
+      case 'diff': {
+        if (cwd === null) return
+        // Opened in a pane rather than rendered here: `git diff` is already a pager the
+        // user has configured — delta, less, whatever — and reimplementing that badly
+        // in a 34-column panel would help nobody.
+        const args = outcome.staged
+          ? ['diff', '--staged', '--', outcome.path]
+          : ['diff', '--', outcome.path]
+        await this.call('pane.split', {
+          direction: 'right',
+          focus: true,
+          command: 'git',
+          args,
+          cwd: panel.status?.root ?? cwd
+        })
+        return
+      }
+    }
   }
 
   /** The `»` in the status bar brings a collapsed sidebar back. */
@@ -1674,6 +1827,18 @@ export class TuiApp {
         this.renameFocusedPane()
         return
       }
+      case 'client.source-control': {
+        if (this.scm !== null) {
+          this.scm = null
+          this.setStatus('')
+          this.requestRender()
+          return
+        }
+        this.scm = new ScmPanel()
+        this.requestRender()
+        await this.refreshScm()
+        return
+      }
       case 'workspace.close': {
         if (workspace === null) return
         const count = this.paneCountOf(workspace.workspaceId)
@@ -1840,7 +2005,9 @@ export class TuiApp {
 
       const sidebar = this.sidebarArea()
       if (sidebar !== null) {
-        if (this.sidebarMode === 'rail') {
+        if (this.scm !== null) {
+          renderScmPanel(this.back, sidebar, this.scm, this.palette, true)
+        } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
         } else {
           renderSidebar(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
@@ -1987,6 +2154,8 @@ export class TuiApp {
       .join('  ')
     const right = this.prefixArmed
       ? 'PREFIX'
+      : this.scm !== null
+        ? SCM_HINT
       : this.status.length > 0
         ? this.status
         : `${describeChord(this.config.keys.prefix)} ? · menu for keys`

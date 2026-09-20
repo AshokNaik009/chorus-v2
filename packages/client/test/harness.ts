@@ -49,6 +49,8 @@ export interface HarnessOptions {
   readonly rows?: number
   readonly command?: string
   readonly args?: readonly string[]
+  /** Working directory for the first pane, passed through as `--cwd`. */
+  readonly cwd?: string
   /**
    * Extra environment for the pane's process. It goes to the *daemon*, because that is
    * what spawns the pty; the client only names the command.
@@ -115,6 +117,7 @@ export class TuiHarness {
     await waitUntil(async () => (await probeDaemon(paths)) !== null, () => `daemon never bound ${paths.socketPath}`)
 
     const args = [CLIENT_ENTRY, '--data-root', dataRoot]
+    if (options.cwd !== undefined) args.push('--cwd', options.cwd)
     if (options.command !== undefined) args.push('--', options.command, ...(options.args ?? []))
 
     const term = pty.spawn(process.execPath, args, {
