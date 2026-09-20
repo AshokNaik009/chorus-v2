@@ -80,12 +80,23 @@ committed, verified code and a `HANDOFF.md` the next session reads.
 | 3 | Input parsing | Real terminals work | 3-4 wk |
 | 4 | Session model + API | It is a multiplexer | 4-6 wk |
 | 5 | Agents + detection + packaging | It is *this* multiplexer | 3-4 wk |
+| 6 | Remote SSH attach | It works away from the machine | reserved |
+| 7 | Source control, finished | The panel survives a working day | 1-2 wk |
+| 8 | Search, navigation, activity bar | You stop leaving the terminal | 2-3 wk |
+| 9 | Preview, icons, settings | It is pleasant, not just correct | 2-3 wk |
+| 10 | herdr plugin host | *Optional.* Decide before starting | 2-4 wk |
 
 Realistic total: **4-5 months focused**, ~45k lines TS — but see PHASE-4: the
 herdr subsystems it ports measure ~55k lines of Rust, not the ~32k an earlier
 draft of that table claimed, so the 15k budget for `core/` is the softest
 number in this plan.
 Remote SSH attach is deliberately **phase 6**, not squeezed into 5.
+
+Phases 7-9 port **herdr-sidebar** (`/Users/ashoknaik/claude-experiments/herdr-sidebar`, MIT) —
+a file explorer and source-control panel — onto the multiplexer. A first slice landed
+outside the phase system; `HANDOFF.md` says what, and what it got wrong. They do not
+depend on phase 6 and phase 6 does not depend on them. Phase 10 is an alternative to
+7-9's approach, not a continuation of it: read its opening before starting it.
 
 Phases 1 and 2 carry all the architectural risk. If they succeed, the rest is
 volume. If they fail, stop — and you will have spent 4 weeks, not 4 months.

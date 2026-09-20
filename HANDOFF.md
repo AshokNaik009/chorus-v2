@@ -1,11 +1,73 @@
-# HANDOFF — phase 5   done
-asdfasdas jfdllfjsdlfl
+# HANDOFF — phase 5 done, plus an unphased sidebar slice
+
 **Read `PLAN.md` first.** This file is the state of the world as this session leaves it.
 Everything was measured on 2026-09-20, macOS (darwin 26.6.2, arm64, Apple silicon),
 Node v22.1.0, pnpm 10.18.0.
 
 The project is now **leap-chorus**. `herdr-ts` was the working name for phases 1–4 and
 survives only in provenance comments and `NOTICE`.
+
+## Since phase 5: the sidebar slice, built outside the phase system
+
+A later session ported the first slice of **herdr-sidebar**
+(`/Users/ashoknaik/claude-experiments/herdr-sidebar`, MIT, measured at `1a5d37e`) without a
+phase doc. It is committed, tested and pushed. **Phases 7-10 now exist to finish it
+properly — read `phases/PHASE-7.md` next.** Phase 6 (SSH) is still reserved and unbuilt;
+7-9 neither depend on it nor block it.
+
+`pnpm test` is **893 tests** as this session ends, up from 805.
+
+### What landed
+
+| Area | Files | What it does |
+|---|---|---|
+| Working-tree git | `packages/daemon/src/git.ts` (282) | status, stage, unstage, discard, commit. Porcelain parsing ported from herdr-sidebar's `git.rs` |
+| Live cwd | `packages/daemon/src/cwd.ts` (87) | the shell's *real* directory: procfs on Linux, `lsof` on macOS |
+| Filesystem | `packages/daemon/src/fs.ts` (108) | `fs.list`, the daemon's first fs surface; containment checked after symlinks resolve |
+| Source Control | `packages/client/src/scm.ts` (333) | `C-b g`. Changes list, stage/unstage, commit, discard, diff in a pane |
+| Explorer | `packages/client/src/explorer.ts` (346) | `C-b e`. Lazy tree, git decorations, scrolling |
+| Pane CLI | `packages/client/src/main.ts` | `pane list/open/focus/zoom/close`, shaped like herdr's |
+
+New methods: `fs.list`, `git.status`, `git.stage`, `git.unstage`, `git.discard`,
+`git.commit`. All take `paneId` (preferred) or `cwd`.
+
+```ts
+interface GitFileEntry { path: string; origin: string | null; letter: string }
+interface GitStatusResult {
+  root: string; branch: string
+  staged: readonly GitFileEntry[]; unstaged: readonly GitFileEntry[]
+  ahead: number; behind: number; hasUpstream: boolean
+}
+interface FsListResult { root: string; path: string; entries: readonly FsEntry[] }
+interface FsEntry { name: string; kind: 'dir' | 'file' | 'other'; link: boolean }
+```
+
+### Two confirmed defects, both left open on purpose
+
+Verified against real git on 2026-09-20. Repros and fixes are in `phases/PHASE-7.md`.
+
+1. **Staging a rename leaves a dangling deletion.** `git.ts` stages only the selected
+   path; herdr-sidebar passes the origin too. `GitFileEntry.origin` is on the wire and
+   unused.
+2. **The Source Control panel does not scroll.** It draws until it runs out of height,
+   but the cursor keeps moving — so `Enter` can stage a file you cannot see. The
+   Explorer got a viewport and the changes list never did.
+
+### Things established by running them, not by reasoning
+
+Recorded because each one cost a wrong assumption first:
+
+- `git restore --staged` fails `fatal: could not resolve 'HEAD'` on a repo with no
+  commits. Unstage therefore uses `reset -q HEAD --`.
+- `-z` porcelain v1 writes renames **target first**: `XY PATH\0ORIG_PATH\0`. Confirmed
+  against git's docs and raw bytes.
+- `pane.cwd` is the *spawn* directory. `cd` updates nothing and announces nothing, so
+  anything wanting the live directory must read the process.
+- The client's `this.call` catches errors into the status bar. A panel that needs its
+  own error must call `options.client.call` directly.
+- **`packages/client/test/multiplexer.test.ts` is flaky** — roughly 2 runs in 3, a
+  different test each time. Reproduced on a stashed, clean tree: it predates all of the
+  above. Not yet diagnosed.
 
 ## Status: phase 5 complete on eight of ten criteria; two need a machine this is not
 
@@ -260,8 +322,10 @@ start phase 6.
 ```bash
 pnpm install
 pnpm build
-pnpm test                                    # 805 tests; do not run anything alongside it
-node packages/client/dist/main.js            # drive it yourself
+ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus   # or pnpm link --global
+pnpm test                                    # 893 tests; do not run anything alongside it
+LEAP_CHORUS_DISABLE_SOUND=1 pnpm test        # the suite must not spawn afplay
+leap-chorus                                  # drive it yourself
 node scripts/build-app.mjs && node scripts/package-tarball.mjs --node-dir <node>
 sh scripts/smoke-tarball.sh dist-release/*.tar.gz
 node bench/dist/render-scale.js --seconds 15 # alone, or the numbers are fiction
