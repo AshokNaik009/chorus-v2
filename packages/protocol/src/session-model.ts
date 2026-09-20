@@ -514,6 +514,28 @@ export interface GitCommitParams extends GitTargetParams {
   readonly message: string
 }
 
+// ---------------------------------------------------------------------------
+// Filesystem (the explorer)
+// ---------------------------------------------------------------------------
+
+export interface FsEntry {
+  readonly name: string
+  readonly kind: 'dir' | 'file' | 'other'
+  readonly link: boolean
+}
+
+export interface FsListParams extends GitTargetParams {
+  /** Directory to list, relative to the resolved root. `''` or absent is the root. */
+  readonly path?: string
+}
+
+export interface FsListResult {
+  /** The root the listing is relative to, absolute and real. */
+  readonly root: string
+  readonly path: string
+  readonly entries: readonly FsEntry[]
+}
+
 export interface WorktreeListParams {
   /** Any path inside the repository. Defaults to the focused pane's cwd. */
   readonly repo?: string

@@ -57,6 +57,8 @@ import type {
   WorktreeCreateParams,
   WorktreeCreateResult,
   WorktreeListParams,
+  FsListParams,
+  FsListResult,
   GitCommitParams,
   GitPathsParams,
   GitStatusParams,
@@ -408,6 +410,8 @@ export interface AgentMethodMap {
   'config.set_theme': { params: ConfigSetThemeParams; result: ConfigSetThemeResult }
   'config.set': { params: ConfigSetParams; result: ConfigSetResult }
 
+  'fs.list': { params: FsListParams; result: FsListResult }
+
   'git.status': { params: GitStatusParams; result: GitStatusResult }
   'git.stage': { params: GitPathsParams; result: GitStatusResult }
   'git.unstage': { params: GitPathsParams; result: GitStatusResult }
@@ -431,6 +435,7 @@ export const AGENT_METHODS = [
   'agent.reload_manifests',
   'config.set_theme',
   'config.set',
+  'fs.list',
   'git.status',
   'git.stage',
   'git.unstage',

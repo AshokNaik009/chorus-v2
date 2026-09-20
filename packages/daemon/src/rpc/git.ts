@@ -7,13 +7,15 @@
  * clients watching the same repository would disagree in between.
  */
 
-import { ErrorCodes, type GitStatusResult } from '@leap-chorus/protocol'
+import { ErrorCodes, type FsListResult, type GitStatusResult } from '@leap-chorus/protocol'
+import type { FsService } from '../fs.js'
 import { liveCwd } from '../cwd.js'
 import type { GitService, GitStatus } from '../git.js'
 import { RequestError, optionalString, optionalStringArray, requireString, type Params } from './params.js'
 
 export interface GitContext {
   readonly git: GitService
+  readonly fs: FsService
   /** The pane's shell pid and recorded cwd, for resolving `paneId`. */
   readonly paneCwdInput: (paneId: string) => { shellPid: number | null; recorded: string } | null
 }
@@ -47,6 +49,25 @@ function wire(status: GitStatus): GitStatusResult {
     behind: status.behind,
     hasUpstream: status.hasUpstream
   }
+}
+
+/**
+ * List a directory under the pane's repository, or its working directory.
+ *
+ * Rooted at the repository when there is one, so the tree matches what source control
+ * is talking about; at the shell's directory otherwise, so it still works outside a
+ * checkout.
+ */
+export async function fsList(context: GitContext, params: Params): Promise<FsListResult> {
+  const cwd = await resolveCwd(context, params)
+  let root: string
+  try {
+    root = await context.git.repoRoot(cwd)
+  } catch {
+    root = cwd
+  }
+  const listing = await context.fs.list(root, optionalString(params, 'path') ?? '')
+  return { root, path: listing.path, entries: listing.entries }
 }
 
 export async function gitStatus(context: GitContext, params: Params): Promise<GitStatusResult> {

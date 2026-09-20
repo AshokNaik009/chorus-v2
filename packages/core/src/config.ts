@@ -192,6 +192,7 @@ export const DEFAULT_PREFIX_BINDINGS: Readonly<Record<string, string>> = {
   s: 'client.toggle-sidebar',
   // `g` for git, as in herdr-sidebar's Source Control view.
   g: 'client.source-control',
+  e: 'client.explorer',
   d: 'client.detach',
   q: 'client.quit',
   r: 'client.repaint',

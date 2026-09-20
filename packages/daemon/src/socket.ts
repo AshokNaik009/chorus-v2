@@ -34,6 +34,7 @@ import type { AgentDetector } from '@leap-chorus/detect'
 import * as agents from './rpc/agents.js'
 import * as gitRpc from './rpc/git.js'
 import * as worktrees from './rpc/worktrees.js'
+import { FsService } from './fs.js'
 import { GitService } from './git.js'
 import { WorktreeService } from './worktree.js'
 import type { IntegrationOptions } from './integration/install.js'
@@ -109,9 +110,15 @@ export class DaemonServer {
   private readonly worktreeService = new WorktreeService()
   /** Working-tree git: status, staging, commits. Stateless for the same reason. */
   private readonly gitService = new GitService()
+  /** Directory listings for the explorer. The client has no filesystem of its own. */
+  private readonly fsService = new FsService()
 
   private gitContext(): gitRpc.GitContext {
-    return { git: this.gitService, paneCwdInput: (paneId) => this.runtime.paneCwdInput(paneId) }
+    return {
+      git: this.gitService,
+      fs: this.fsService,
+      paneCwdInput: (paneId) => this.runtime.paneCwdInput(paneId)
+    }
   }
   /** The session model: workspaces, tabs, panes. See runtime.ts. */
   readonly runtime: SessionRuntime
@@ -521,6 +528,8 @@ export class DaemonServer {
       }
 
       // --- worktrees and integrations (PHASE-5 Part B) ----------------------
+      case 'fs.list':
+        return gitRpc.fsList(this.gitContext(), params)
       case 'git.status':
         return gitRpc.gitStatus(this.gitContext(), params)
       case 'git.stage':

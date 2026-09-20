@@ -103,7 +103,8 @@ import {
 } from './prompt.js'
 import { playSound, type SoundKind } from './sound.js'
 import { MIN_SCM_WIDTH, SCM_HINT, ScmPanel, renderScmPanel, type ScmOutcome } from './scm.js'
-import type { GitStatusResult } from '@leap-chorus/protocol'
+import { EXPLORER_HINT, ExplorerPanel, type ExplorerOutcome } from './explorer.js'
+import type { FsListResult, GitStatusResult } from '@leap-chorus/protocol'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
@@ -252,6 +253,8 @@ export class TuiApp {
    * diff and the code at once.
    */
   private scm: ScmPanel | null = null
+  /** The file explorer, or null when it is closed. Shares the dock with the panel above. */
+  private explorer: ExplorerPanel | null = null
   /** A pending destructive confirmation, or null. */
   private confirm: ConfirmDialog | null = null
   /** The divider being dragged, or null. See `handleDivider`. */
@@ -558,7 +561,7 @@ export class TuiApp {
     }
     // The panel needs room a workspace list does not: a path plus its status letter.
     const configured = this.sidebarWidthOverride ?? this.config.ui.sidebarWidth
-    const wanted = this.scm !== null ? Math.max(configured, MIN_SCM_WIDTH) : configured
+    const wanted = this.scm !== null || this.explorer !== null ? Math.max(configured, MIN_SCM_WIDTH) : configured
     const width = Math.max(MIN_SIDEBAR_WIDTH, Math.min(wanted, Math.floor(this.cols / 3)))
     return { x: 0, y: 0, width, height: Math.max(0, this.rows - this.statusRows()) }
   }
@@ -734,9 +737,25 @@ export class TuiApp {
     // The panel owns the keyboard while it is open, for the reason scm.ts gives: `d`
     // discards a file here and is an ordinary keystroke to the shell behind it. The
     // prefix still wins, so `C-b` reaches the multiplexer from inside the panel.
-    if (this.scm !== null && !this.prefixArmed && !isPrefix(this.keymap, key)) {
-      await this.applyScmOutcome(this.scm.handleKey(key.name, key.char))
-      return
+    if ((this.scm !== null || this.explorer !== null) && !this.prefixArmed && !isPrefix(this.keymap, key)) {
+      // `1` and `2` switch views from either one, which is what the activity bar does
+      // in the sidebar this borrows from.
+      if (key.char === '1' && this.explorer === null) {
+        await this.openExplorer()
+        return
+      }
+      if (key.char === '2' && this.scm === null) {
+        await this.openScm()
+        return
+      }
+      if (this.explorer !== null) {
+        await this.applyExplorerOutcome(this.explorer.handleKey(key.name, key.char))
+        return
+      }
+      if (this.scm !== null) {
+        await this.applyScmOutcome(this.scm.handleKey(key.name, key.char))
+        return
+      }
     }
     if (this.prefixArmed) {
       this.prefixArmed = false
@@ -1528,6 +1547,98 @@ export class TuiApp {
     }
   }
 
+
+  /** Close whichever side panel is open, and give the keyboard back. */
+  private closePanels(): void {
+    this.scm = null
+    this.explorer = null
+    this.setStatus('')
+    this.requestRender()
+  }
+
+  private async openScm(): Promise<void> {
+    this.explorer = null
+    this.scm = new ScmPanel()
+    this.requestRender()
+    await this.refreshScm()
+  }
+
+  private async openExplorer(): Promise<void> {
+    this.scm = null
+    const panel = new ExplorerPanel()
+    this.explorer = panel
+    this.requestRender()
+    await this.listExplorer('')
+    // Decorations come from the same status the panel uses, fetched once on open. A
+    // tree with no git markers is a file manager; the markers are the point.
+    await this.refreshExplorerStatus()
+  }
+
+  /** Ask the daemon for one directory and hand it to the tree. */
+  private async listExplorer(path: string): Promise<void> {
+    const panel = this.explorer
+    const paneId = this.scmPaneId()
+    if (panel === null) return
+    if (paneId === null) {
+      panel.fail('no focused pane')
+      this.requestRender()
+      return
+    }
+    try {
+      const result = (await this.options.client.call('fs.list', { paneId, path } as never)) as FsListResult
+      if (this.explorer === panel) panel.adopt(result.root, result.path, result.entries)
+    } catch (error) {
+      if (this.explorer === panel) panel.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /** Refresh the tree's git decorations. Failure is silent: a tree still lists files. */
+  private async refreshExplorerStatus(): Promise<void> {
+    const panel = this.explorer
+    const paneId = this.scmPaneId()
+    if (panel === null || paneId === null) return
+    try {
+      panel.status = (await this.options.client.call('git.status', { paneId } as never)) as GitStatusResult
+    } catch {
+      panel.status = null
+    }
+    this.requestRender()
+  }
+
+  private async applyExplorerOutcome(outcome: ExplorerOutcome): Promise<void> {
+    const panel = this.explorer
+    if (panel === null) return
+    switch (outcome.kind) {
+      case 'none':
+        this.requestRender()
+        return
+      case 'close':
+        this.closePanels()
+        return
+      case 'refresh':
+        await this.listExplorer('')
+        await this.refreshExplorerStatus()
+        return
+      case 'expand':
+        await this.listExplorer(outcome.path)
+        return
+      case 'open': {
+        // Opened in a pane with the user's own pager, for the same reason a diff is:
+        // this is a multiplexer, and the tool for looking at a file is already installed.
+        const full = `${panel.root}/${outcome.path}`
+        await this.call('pane.split', {
+          direction: 'right',
+          focus: true,
+          command: process.env['PAGER'] ?? 'less',
+          args: [full],
+          cwd: panel.root
+        })
+        return
+      }
+    }
+  }
+
   /** The `»` in the status bar brings a collapsed sidebar back. */
   private async handleStatusClick(mouse: MouseEvent): Promise<boolean> {
     if (mouse.kind !== 'down' || this.statusRows() === 0) return false
@@ -1833,14 +1944,18 @@ export class TuiApp {
       }
       case 'client.source-control': {
         if (this.scm !== null) {
-          this.scm = null
-          this.setStatus('')
-          this.requestRender()
+          this.closePanels()
           return
         }
-        this.scm = new ScmPanel()
-        this.requestRender()
-        await this.refreshScm()
+        await this.openScm()
+        return
+      }
+      case 'client.explorer': {
+        if (this.explorer !== null) {
+          this.closePanels()
+          return
+        }
+        await this.openExplorer()
         return
       }
       case 'workspace.close': {
@@ -2009,7 +2124,9 @@ export class TuiApp {
 
       const sidebar = this.sidebarArea()
       if (sidebar !== null) {
-        if (this.scm !== null) {
+        if (this.explorer !== null) {
+          this.explorer.renderInto(this.back, sidebar, this.palette)
+        } else if (this.scm !== null) {
           renderScmPanel(this.back, sidebar, this.scm, this.palette, true)
         } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
@@ -2158,8 +2275,10 @@ export class TuiApp {
       .join('  ')
     const right = this.prefixArmed
       ? 'PREFIX'
-      : this.scm !== null
-        ? SCM_HINT
+      : this.explorer !== null
+        ? EXPLORER_HINT
+        : this.scm !== null
+          ? SCM_HINT
       : this.status.length > 0
         ? this.status
         : `${describeChord(this.config.keys.prefix)} ? · menu for keys`

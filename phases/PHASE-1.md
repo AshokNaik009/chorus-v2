@@ -1,5 +1,5 @@
 # Phase 1 — Daemon + PTY survival
-
+saAsaSAs
 **Read `../PLAN.md` first.** This phase assumes no prior context.
 
 ## Why this phase is first

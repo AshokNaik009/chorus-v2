@@ -118,6 +118,31 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 If clicks do nothing, the terminal is not forwarding them: macOS Terminal.app needs
 *View → Allow Mouse Reporting*, and an outer multiplexer will eat them first.
 
+## File explorer
+
+`Ctrl-B e` opens a file tree for the focused pane's repository — or its working
+directory when that is not a checkout. `1` and `2` switch between the explorer and
+source control while either is open.
+
+| Key | Action |
+|---|---|
+| `↑↓` / `j k` | move |
+| `Enter` / `l` / `→` | expand a directory, or open a file in a pane |
+| `h` / `←` | fold it, or jump to the parent |
+| `.` | show hidden files |
+| `r` | refresh |
+| `Esc` / `b` / `q` | close |
+
+Directories are listed one at a time as you open them, so a checkout with a
+`node_modules` in it costs nothing until you look inside. A file carries its git
+status letter; a folded directory carries a `·` when something under it changed.
+Expanded directories stay open across a refresh.
+
+Glyphs are ASCII on purpose. Nerd Font icons would look better and cost correctness —
+they sit in the Private Use Area, get measured as one column, and shift every column
+after them on a terminal that disagrees. That is the bug `pane-buttons = ascii`
+already exists to escape.
+
 ## Source control
 
 `Ctrl-B g` opens a Source Control panel docked where the sidebar sits, for the
