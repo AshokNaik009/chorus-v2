@@ -80,6 +80,7 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 | `C-b c` / `C-b &` | new tab / close tab |
 | `C-b n` / `C-b p` | next / previous tab |
 | `C-b ,` | rename the tab |
+| `C-b P` | rename the focused pane |
 | `C-b w` | new workspace |
 | `C-b )` / `C-b (` | next / previous workspace |
 | `C-b $` | rename the workspace |
@@ -91,6 +92,7 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 | `C-b q` | quit, killing the panes |
 | `C-b C-b` | send a literal `Ctrl-B` |
 | click | focus a pane, a workspace in the sidebar, or a tab |
+| click a `⋮` grip | rename the focused pane (drag the same grip to resize) |
 | wheel | scroll a pane that has not asked for mouse reports |
 
 If clicks do nothing, the terminal is not forwarding them: macOS Terminal.app needs

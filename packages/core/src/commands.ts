@@ -25,6 +25,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'pane.split-down', summary: 'Split the focused pane top/bottom', scope: 'session' },
   { name: 'pane.close', summary: 'Close the focused pane', scope: 'session' },
   { name: 'pane.zoom', summary: 'Toggle zoom on the focused pane', scope: 'session' },
+  { name: 'pane.rename', summary: 'Rename the focused pane', scope: 'session' },
   { name: 'pane.focus-left', summary: 'Focus the pane to the left', scope: 'session' },
   { name: 'pane.focus-right', summary: 'Focus the pane to the right', scope: 'session' },
   { name: 'pane.focus-up', summary: 'Focus the pane above', scope: 'session' },

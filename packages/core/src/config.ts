@@ -179,6 +179,8 @@ export const DEFAULT_PREFIX_BINDINGS: Readonly<Record<string, string>> = {
   // here are the tab and the workspace.
   ',': 'tab.rename',
   $: 'workspace.rename',
+  // herdr's `prefix+shift+p`. Lowercase `p` is taken by tab.previous, as in tmux.
+  P: 'pane.rename',
   // herdr advertises `?` for keybinds and settings; this is the settings half.
   '?': 'client.settings',
   '&': 'tab.close',

@@ -226,7 +226,7 @@ export class TuiApp {
    * the answer is that a one-line prompt is enough for a one-line answer, and a modal
    * would be a box drawn around a text field.
    */
-  private prompt: { dialog: PromptDialog; kind: 'workspace' | 'tab'; id: string } | null = null
+  private prompt: { dialog: PromptDialog; kind: 'workspace' | 'tab' | 'pane'; id: string } | null = null
   /**
    * An open popup menu, or null.
    *
@@ -240,7 +240,13 @@ export class TuiApp {
   /** A pending destructive confirmation, or null. */
   private confirm: ConfirmDialog | null = null
   /** The divider being dragged, or null. See `handleDivider`. */
-  private drag: { tabId: string; path: readonly boolean[]; direction: 'horizontal' | 'vertical' } | null = null
+  private drag: {
+    tabId: string
+    path: readonly boolean[]
+    direction: 'horizontal' | 'vertical'
+    /** Set once the pointer actually moves, which is what separates a drag from a click. */
+    moved: boolean
+  } | null = null
   private status = ''
   private forceRepaint = true
   /** Where the last frame left the cursor, so an unchanged frame can write nothing. */
@@ -1007,7 +1013,23 @@ export class TuiApp {
   }
 
   /** Open the rename dialog for a workspace or a tab. */
-  private openRename(kind: 'workspace' | 'tab', id: string, current: string): void {
+  /**
+   * Rename the focused pane.
+   *
+   * The focused one rather than a neighbour of whatever was clicked, because a divider
+   * grip sits *between* two panes and belongs to neither. herdr makes the same choice
+   * for `prefix+shift+p`, and the focused pane is the one the border already highlights.
+   */
+  private renameFocusedPane(): void {
+    const pane = paneById(this.state, this.state.focusedPaneId)
+    if (pane === null) return
+    // The placeholder, not `paneTitle`: seeding the field with the program's own OSC
+    // title would make every rename start by deleting text the user never typed.
+    const current = pane.label !== null && pane.label.length > 0 ? pane.label : ''
+    this.openRename('pane', pane.paneId, current)
+  }
+
+  private openRename(kind: 'workspace' | 'tab' | 'pane', id: string, current: string): void {
     this.prompt = { dialog: new PromptDialog(`rename ${kind}`, current), kind, id }
     this.requestRender()
   }
@@ -1047,6 +1069,8 @@ export class TuiApp {
     // default numbering comes back.
     if (prompt.kind === 'workspace') {
       await this.call('workspace.rename', { workspaceId: prompt.id, label: outcome.value })
+    } else if (prompt.kind === 'pane') {
+      await this.call('pane.rename', { paneId: prompt.id, label: outcome.value })
     } else {
       await this.call('tab.rename', { tabId: prompt.id, label: outcome.value })
     }
@@ -1180,6 +1204,7 @@ export class TuiApp {
       // with no button down, and treating it as a drag made a divider follow the
       // pointer around the screen long after the click that started it.
       if (mouse.kind === 'drag') {
+        this.drag.moved = true
         await this.resizeDivider(this.drag, mouse)
         return true
       }
@@ -1192,7 +1217,11 @@ export class TuiApp {
       // cannot keep dragging, because only `drag` moves anything.
       if (mouse.kind === 'move') return true
       const wasUp = mouse.kind === 'up'
+      const clicked = wasUp && !this.drag.moved
       this.drag = null
+      // A press and release on the grip with no movement in between is a click, not a
+      // resize of zero columns. That is the gesture that names the pane.
+      if (clicked) this.renameFocusedPane()
       return wasUp
     }
     if (mouse.kind !== 'down') return false
@@ -1209,7 +1238,7 @@ export class TuiApp {
     )
     if (grip?.path === undefined || grip.direction === undefined) return false
 
-    this.drag = { tabId: tab.tabId, path: grip.path, direction: grip.direction }
+    this.drag = { tabId: tab.tabId, path: grip.path, direction: grip.direction, moved: false }
     return true
   }
 
@@ -1610,6 +1639,10 @@ export class TuiApp {
         const active = activeTab(this.state)
         if (active === null) return
         this.openRename('tab', active.tabId, tabTitle(active))
+        return
+      }
+      case 'pane.rename': {
+        this.renameFocusedPane()
         return
       }
       case 'workspace.close': {
