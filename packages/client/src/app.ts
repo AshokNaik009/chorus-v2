@@ -226,7 +226,8 @@ export class TuiApp {
    * the answer is that a one-line prompt is enough for a one-line answer, and a modal
    * would be a box drawn around a text field.
    */
-  private prompt: { dialog: PromptDialog; kind: 'workspace' | 'tab' | 'pane'; id: string } | null = null
+  private prompt: { dialog: PromptDialog; kind: 'workspace' | 'tab' | 'pane' | 'new-tab'; id: string } | null =
+    null
   /**
    * An open popup menu, or null.
    *
@@ -1014,6 +1015,25 @@ export class TuiApp {
 
   /** Open the rename dialog for a workspace or a tab. */
   /**
+   * Ask for a name, then create the tab.
+   *
+   * The number the new tab is about to get is seeded into the field, so pressing enter
+   * immediately is the same as the old behaviour of creating one unnamed — the answer
+   * is already correct and the dialog costs one keystroke to dismiss.
+   */
+  private openNewTabPrompt(): void {
+    const workspace = activeWorkspace(this.state)
+    if (workspace === null) return
+    const highest = tabsOf(this.state, workspace.workspaceId).reduce(
+      (best, tab) => Math.max(best, tab.number),
+      0
+    )
+    const next = `${highest + 1}`
+    this.prompt = { dialog: new PromptDialog('new tab', next), kind: 'new-tab', id: next }
+    this.requestRender()
+  }
+
+  /**
    * Rename the focused pane.
    *
    * The focused one rather than a neighbour of whatever was clicked, because a divider
@@ -1064,7 +1084,16 @@ export class TuiApp {
     }
     this.prompt = null
     this.requestRender()
+    // Cancelling a `new-tab` prompt creates nothing. That is the whole reason the tab
+    // is made here and not before the dialog opens: an escape must leave no trace.
     if (outcome.kind === 'cancelled') return
+    if (prompt.kind === 'new-tab') {
+      // An unchanged or empty answer means "no label", so the tab falls back to its
+      // number — which is exactly what the field was showing as a placeholder.
+      const label = outcome.value === prompt.id ? '' : outcome.value
+      await this.call('tab.create', { focus: true, ...(label === '' ? {} : { label }) })
+      return
+    }
     // An empty name *clears* it rather than setting an empty one, which is how the
     // default numbering comes back.
     if (prompt.kind === 'workspace') {
@@ -1457,7 +1486,7 @@ export class TuiApp {
     if (this.hits.newTabSpan !== null && inTabBar) {
       const span = this.hits.newTabSpan
       if (mouse.column >= span.x && mouse.column < span.end) {
-        await this.call('tab.create', { focus: true })
+        this.openNewTabPrompt()
         return true
       }
     }
