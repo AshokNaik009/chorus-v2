@@ -25,6 +25,15 @@ import { ScreenBuffer, truncate, type Rect, type Style } from '@leap-chorus/tui'
 import type { IntegrationRecord } from '@leap-chorus/protocol'
 import type { Palette } from './chrome.js'
 
+/**
+ * The line under the sound toggles.
+ *
+ * Said "the terminal bell — your terminal decides how it sounds" while that was the
+ * mechanism. It no longer is: playback goes through the platform's own audio player,
+ * and the bell is only what happens when there is not one.
+ */
+const SOUND_CAPTION = 'plays through your system audio; falls back to the terminal bell'
+
 /** The toggles in the sound section, and the config paths they write. */
 const SOUND_ROWS = [
   { key: 'agentBlocked', path: 'sound.agent-blocked', label: 'ring when an agent needs you' },
@@ -224,7 +233,7 @@ export class SettingsDialog {
         y += 1
       }
       if (y < limit) {
-        buffer.writeString(inner.x, y + 1, truncate('the terminal bell — your terminal decides how it sounds', inner.width), palette.idleBorder, area.x + area.width)
+        buffer.writeString(inner.x, y + 1, truncate(SOUND_CAPTION, inner.width), palette.idleBorder, area.x + area.width)
       }
     } else if (this.integrations.length === 0) {
       buffer.writeString(inner.x, y, 'no integrations are available', palette.idleBorder, area.x + area.width)

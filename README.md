@@ -162,8 +162,10 @@ name = "catppuccin"     # or set individual roles below
 agent-blocked = 1       # palette index; the state that is waiting on you
 
 [sound]
-agent-blocked = true    # ring when an agent needs you
+agent-blocked = true    # play when an agent needs you
 agent-done = true
+# done-path = "~/sounds/ding.mp3"     # optional: your own files instead
+# blocked-path = "~/sounds/alert.mp3"
 
 [keys]
 prefix = "C-a"
@@ -172,6 +174,15 @@ prefix = "C-a"
 "|" = "pane.split-right"
 "%" = ""
 ```
+
+Notifications play through your system's audio player — `afplay` on macOS, one of
+`paplay`/`pw-play`/`ffplay`/`mpg123`/`mpv` on Linux. If none is installed, leap-chorus
+falls back to the terminal bell, which many terminals ignore (VS Code's integrated
+terminal does by default). `LEAP_CHORUS_DISABLE_SOUND=1` silences playback entirely.
+
+A sound fires on the *transition* worth interrupting for: any agent becoming blocked,
+and an agent finishing a turn it was working on. An idle agent exiting is you quitting
+it, so that one stays quiet.
 
 Bundled themes: `terminal`, `catppuccin`, `catppuccin-latte`, `tokyo-night`,
 `tokyo-night-day`, `dracula`, `nord`, `gruvbox`, `gruvbox-light`, `one-dark`,

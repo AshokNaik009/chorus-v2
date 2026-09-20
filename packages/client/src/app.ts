@@ -101,6 +101,7 @@ import {
   type MenuOutcome,
   type PromptOutcome
 } from './prompt.js'
+import { playSound, type SoundKind } from './sound.js'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
@@ -1154,9 +1155,12 @@ export class TuiApp {
         this.invalidate()
         return true
       }
+      // Ignored, for the reason spelled out in `handleDivider`: with motion reporting
+      // on, `move` interleaves with a real drag and cannot be read as the end of one.
+      if (mouse.kind === 'move') return true
       // Anything else ends it, not just `up`: a drag that loses its release — a
       // pointer leaving the window, a report the terminal never sent — must not stay
-      // armed forever.
+      // armed forever. A stray press clears it and is then handled normally.
       this.draggingSidebar = false
       return mouse.kind === 'up'
     }
@@ -1179,6 +1183,14 @@ export class TuiApp {
         await this.resizeDivider(this.drag, mouse)
         return true
       }
+      // A `move` does not end a drag, it is just ignored. Motion reporting is on by
+      // default, so the terminal emits `move` for the same pointer travel that
+      // produces `drag`, and one arriving mid-drag — or one sent just before the
+      // press and decoded just after it — used to cancel the resize outright. That is
+      // what made dragging a divider stop working, intermittently and then for good.
+      // Not resizing on `move` is what keeps the old bug fixed: a released button
+      // cannot keep dragging, because only `drag` moves anything.
+      if (mouse.kind === 'move') return true
       const wasUp = mouse.kind === 'up'
       this.drag = null
       return wasUp
@@ -1258,21 +1270,23 @@ export class TuiApp {
   }
 
   /**
-   * Ring the bell when an agent's state changes to one worth interrupting for.
+   * Notify when an agent's state changes to one worth interrupting for.
    *
    * On the *transition*, not the state: a pane that has been blocked for a minute
    * must not ring on every poll. Each pane's previous status comes from the snapshot
    * we are replacing, which is the only place it is recorded — the client keeps no
    * side table, because agent state is the daemon's to own.
    *
-   * One bell per refresh however many panes changed, since the point is to get the
-   * user's attention once, not to count events at them.
+   * One notification per refresh however many panes changed, since the point is to get
+   * the user's attention once, not to count events at them. `blocked` wins a tie: it
+   * is the state that is waiting on the human.
    */
   private ringForAgentChanges(previous: SessionStateSnapshot, next: SessionStateSnapshot): void {
     const { agentDone, agentBlocked } = this.config.sound
     if (!agentDone && !agentBlocked) return
     const before = new Map(previous.panes.map((pane) => [pane.paneId, pane.agentStatus ?? null]))
 
+    let kind: SoundKind | null = null
     for (const pane of next.panes) {
       const now = pane.agentStatus ?? null
       if (now === null) continue
@@ -1280,14 +1294,23 @@ export class TuiApp {
       // A pane the previous snapshot did not have is not a transition: attaching to a
       // session full of blocked agents should not play a fanfare.
       if (was === undefined || was === now) continue
-      const worth = (now === 'blocked' && agentBlocked) || ((now === 'idle' || now === 'done') && agentDone)
+      const blocked = now === 'blocked' && agentBlocked
+      const done = (now === 'idle' || now === 'done') && agentDone
       // Only from `working`: idle -> done is the agent exiting, which the user did.
       const fromWork = was === 'working' || (now === 'blocked' && was !== 'blocked')
-      if (worth && fromWork) {
-        this.options.write('\u0007')
-        return
+      if (!fromWork) continue
+      if (blocked) {
+        kind = 'blocked'
+        break
       }
+      if (done) kind = 'done'
     }
+    if (kind === null) return
+
+    const custom = kind === 'blocked' ? this.config.sound.blockedPath : this.config.sound.donePath
+    // The bell is the fallback, not the mechanism: a machine with no audio player at
+    // all still gets whatever its terminal does with `\x07`.
+    if (!playSound(kind, custom)) this.options.write('\u0007')
   }
 
   /** The `»` in the status bar brings a collapsed sidebar back. */

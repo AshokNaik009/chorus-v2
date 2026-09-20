@@ -121,18 +121,23 @@ export interface KeysConfig {
 }
 
 /**
- * When to ring the terminal bell.
+ * When to play a notification, and what to play.
  *
- * The bell, not a sound file: a multiplexer has no audio device and no business
- * acquiring one, and `\x07` is the one noise every terminal already knows how to make
- * — routed through whatever the user configured, including "flash instead" and
- * "nothing at all".
+ * This was once the terminal bell alone, on the reasoning that a multiplexer has no
+ * business acquiring an audio device when `\x07` is a noise every terminal already
+ * knows how to make. In practice most terminals make no noise for it — VS Code's
+ * integrated terminal ignores it by default — so the feature was silent for most users
+ * with nothing to indicate why. herdr plays a real file through the platform's own
+ * player and so do we; the bell remains the fallback where no player exists.
  */
 export interface SoundConfig {
   /** An agent finished its turn: went from working to idle, or exited. */
   readonly agentDone: boolean
   /** An agent is waiting on you. The one worth interrupting for. */
   readonly agentBlocked: boolean
+  /** An audio file to play instead of the bundled one. Empty means the bundled one. */
+  readonly donePath: string
+  readonly blockedPath: string
 }
 
 export interface Config {
@@ -194,7 +199,7 @@ export const DEFAULT_CONFIG: Config = {
   themeName: '',
   // Both on: the entire point of a status badge is to be noticed, and the two
   // transitions worth a noise are "your turn" and "it finished".
-  sound: { agentDone: true, agentBlocked: true },
+  sound: { agentDone: true, agentBlocked: true, donePath: '', blockedPath: '' },
   general: { shell: '', cwd: '', scrollback: 5000, mouse: true, mouseHover: true, scrollStep: 0 },
   ui: { sidebar: true, sidebarWidth: 22, tabBar: true, statusBar: true, paneBorders: true, paneButtons: 'icons' },
   theme: {
@@ -298,7 +303,9 @@ const SCHEMA: readonly TableSpec[] = [
     key: 'sound',
     fields: [
       { key: 'agent-done', kind: 'boolean' },
-      { key: 'agent-blocked', kind: 'boolean' }
+      { key: 'agent-blocked', kind: 'boolean' },
+      { key: 'done-path', kind: 'string' },
+      { key: 'blocked-path', kind: 'string' }
     ]
   },
   {
@@ -345,6 +352,8 @@ const FIELD_PATHS: Readonly<Record<string, [keyof Config, string] | [keyof Confi
   'theme.name': ['themeName'],
   'sound.agent-done': ['sound', 'agentDone'],
   'sound.agent-blocked': ['sound', 'agentBlocked'],
+  'sound.done-path': ['sound', 'donePath'],
+  'sound.blocked-path': ['sound', 'blockedPath'],
   'keys.prefix': ['keys', 'prefix'],
   'keys.bindings': ['keys', 'prefixBindings'],
   'keys.direct-bindings': ['keys', 'directBindings']

@@ -166,6 +166,11 @@ export async function buildApp({ clean = true, slot = hostSlot() } = {}) {
   }
   copySlotPrebuild(source, target, slot)
 
+  // The notification sounds, beside the bundle. `sound.ts` walks up from its own file
+  // to find `assets/sounds`, which is the same lookup that finds them in a source
+  // checkout and in the tarball's `lib/` — so this copy is all the packaging needs.
+  cpSync(join(root, 'assets', 'sounds'), join(outDir, 'assets', 'sounds'), { recursive: true })
+
   const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
   writeFileSync(
     join(outDir, 'package.json'),
