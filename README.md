@@ -30,16 +30,25 @@ answers that without you visiting each pane.
 ## Install and run
 
 ```bash
-pnpm install     # also repairs node-pty's spawn-helper permissions
+pnpm install          # also repairs node-pty's spawn-helper permissions
 pnpm build
+pnpm link --global    # puts `leap-chorus` on your PATH
 ```
 
 Then start it:
 
 ```bash
-node packages/client/dist/main.js               # a shell in one pane
-node packages/client/dist/main.js -- /bin/bash  # pick the program
-node packages/client/dist/main.js --config ./my.toml
+leap-chorus                  # a shell in one pane
+leap-chorus -- /bin/bash     # pick the program
+leap-chorus --config ./my.toml
+```
+
+Without the link step there is no `leap-chorus` command — a source checkout builds to
+`packages/client/dist/main.js`, and only the release tarball ships a launcher. Run it
+directly if you would rather not link:
+
+```bash
+node packages/client/dist/main.js
 ```
 
 Open a pane and launch an agent in it (`claude`, `codex`, `opencode`) — detection is
@@ -59,7 +68,7 @@ It runs fine inside another terminal, including VS Code's:
 the architecture, so to actually stop everything:
 
 ```bash
-node packages/client/dist/main.js kill-server
+leap-chorus kill-server
 ```
 
 It will not start a daemon just to kill it.
