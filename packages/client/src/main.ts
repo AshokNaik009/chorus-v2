@@ -28,6 +28,13 @@ Options:
 
 Commands:
   kill-server          stop the daemon and every pane it owns
+  pane list            every pane as JSON: id, cwd, agent, status, focus
+  pane open [pane] [--right|--down] [--command <cmd>] [--cwd <dir>] [--no-focus]
+                       split a pane and print the new pane's id
+  pane focus <pane>    focus a pane
+  pane zoom [pane] [--on|--off]
+                       zoom a pane, or toggle when neither flag is given
+  pane close <pane>    close a pane
   agent read <pane> [--source detection|viewport]
                        print the text detection runs against
   agent explain <pane> which rules fired, and the region each one saw
@@ -56,6 +63,7 @@ interface Options {
   noMouse: boolean
   killServer: boolean
   agent?: { verb: string; paneId: string | undefined; rest: string[] }
+  pane?: { verb: string; paneId: string | undefined; rest: string[] }
   help: boolean
   command?: string
   args: string[]
@@ -99,6 +107,11 @@ export function parseArgs(argv: readonly string[]): Options {
       // tmux's name for it, as a subcommand or a flag, because muscle memory will
       // try both.
       options.killServer = true
+    } else if (arg === 'pane') {
+      // `pane <verb> [id] [flags]`. Same shape as `agent`: everything after belongs to
+      // the subcommand, so an id is never mistaken for a program to run in a pane.
+      options.pane = { verb: argv[i + 1] ?? '', paneId: argv[i + 2], rest: argv.slice(i + 3) as string[] }
+      break
     } else if (arg === 'agent') {
       // `agent <verb> [pane]`: the detection development loop. Everything after is
       // its own, so the pane id is not mistaken for a command to run in a pane.
@@ -226,6 +239,112 @@ async function agentCommand(
   }
 }
 
+/**
+ * Pane control from the command line.
+ *
+ * Thin wrappers over the RPCs the daemon already exposes, for the same reason the
+ * `agent` verbs are: anything the TUI can do to a pane, a script — or an agent's hook,
+ * or a plugin's launcher — should be able to do without a terminal attached.
+ *
+ * The shapes follow herdr's CLI (`pane list --json`, `pane zoom <id> --on`), because
+ * tools written against herdr invoke exactly these and matching them costs nothing.
+ */
+async function paneCommand(
+  options: Options,
+  request: { verb: string; paneId: string | undefined; rest: string[] }
+): Promise<number> {
+  const needsPane = request.verb === 'close' || request.verb === 'focus'
+  if (needsPane && (request.paneId === undefined || request.paneId.length === 0)) {
+    process.stderr.write(`leap-chorus pane ${request.verb} needs a pane id\n`)
+    return 2
+  }
+
+  let attachment
+  try {
+    attachment = await attach({
+      ...(options.dataRoot === undefined ? {} : { dataRoot: options.dataRoot }),
+      // Never start a daemon to answer a question about panes it would not have.
+      noSpawn: true,
+      clientName: 'leap-chorus-pane'
+    })
+  } catch {
+    process.stderr.write('no daemon is running\n')
+    return 1
+  }
+
+  const { client } = attachment
+  const flag = (name: string): boolean => request.rest.includes(name)
+  const value = (name: string): string | undefined => {
+    const index = request.rest.indexOf(name)
+    return index === -1 ? undefined : request.rest[index + 1]
+  }
+
+  try {
+    switch (request.verb) {
+      case 'list': {
+        const { state } = await client.call('state.get', {})
+        // JSON is the only format worth promising a script. The human-readable form is
+        // the sidebar, which is already better than anything printed here.
+        const panes = state.panes.map((pane) => ({
+          paneId: pane.paneId,
+          number: pane.number,
+          label: pane.label,
+          title: pane.title,
+          cwd: pane.cwd,
+          exited: pane.exited,
+          focused: pane.paneId === state.focusedPaneId,
+          agent: pane.agent ?? null,
+          agentStatus: pane.agentStatus ?? null
+        }))
+        process.stdout.write(`${JSON.stringify(panes, null, 2)}\n`)
+        return 0
+      }
+      case 'focus': {
+        await client.call('pane.focus', { paneId: request.paneId as string })
+        return 0
+      }
+      case 'close': {
+        await client.call('pane.close', { paneId: request.paneId as string })
+        return 0
+      }
+      case 'zoom': {
+        // `--on`/`--off` rather than a bare toggle when asked for explicitly: a script
+        // that zooms must be able to say which state it wants, not flip whatever it found.
+        const mode = flag('--on') ? 'on' : flag('--off') ? 'off' : 'toggle'
+        await client.call('pane.zoom', {
+          ...(request.paneId === undefined || request.paneId.startsWith('-') ? {} : { paneId: request.paneId }),
+          mode
+        })
+        return 0
+      }
+      case 'open': {
+        // The pane id, if any, is the one to split; `--right`/`--down` place the new one.
+        const direction = flag('--down') ? 'down' : 'right'
+        const command = value('--command')
+        const cwd = value('--cwd') ?? options.cwd
+        const result = (await client.call('pane.split', {
+          direction,
+          focus: !flag('--no-focus'),
+          ...(request.paneId === undefined || request.paneId.startsWith('-') ? {} : { targetPaneId: request.paneId }),
+          ...(command === undefined ? {} : { command }),
+          ...(cwd === undefined ? {} : { cwd })
+        })) as { paneId?: string } | null
+        // The new pane's id on stdout, so a caller can act on what it just made.
+        if (result?.paneId !== undefined) process.stdout.write(`${result.paneId}\n`)
+        return 0
+      }
+      default:
+        process.stderr.write(`unknown pane command: ${request.verb}\n`)
+        return 2
+    }
+  } catch (error) {
+    process.stderr.write(`${String(error)}\n`)
+    return 1
+  } finally {
+    client.close()
+  }
+}
+
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const options = parseArgs(argv)
   if (options.help) {
@@ -235,6 +354,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   if (options.killServer) return killServer(options)
   if (options.agent !== undefined) return agentCommand(options, options.agent)
+  if (options.pane !== undefined) return paneCommand(options, options.pane)
 
   const { client } = await attach(options.dataRoot === undefined ? {} : { dataRoot: options.dataRoot })
 

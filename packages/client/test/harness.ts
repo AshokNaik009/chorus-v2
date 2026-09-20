@@ -156,6 +156,11 @@ export class TuiHarness {
     return this.exitCode
   }
 
+  /** Where this harness's daemon keeps its state, for driving the CLI against it. */
+  get root(): string {
+    return this.dataRoot
+  }
+
   get size(): { cols: number; rows: number } {
     return { cols: this.cols, rows: this.rows }
   }

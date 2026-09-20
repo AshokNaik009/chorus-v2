@@ -98,6 +98,24 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 If clicks do nothing, the terminal is not forwarding them: macOS Terminal.app needs
 *View → Allow Mouse Reporting*, and an outer multiplexer will eat them first.
 
+## Controlling panes from a script
+
+Anything the TUI does to a pane, the CLI can do without a terminal attached — for a
+shell script, an agent's hook, or a tool that wants to drive the session. The verbs
+mirror herdr's, so anything written against that CLI invokes the same shapes.
+
+```bash
+leap-chorus pane list                    # every pane as JSON: id, cwd, agent, status
+leap-chorus pane open --right            # split, print the new pane's id
+leap-chorus pane open --down --command nvim --no-focus
+leap-chorus pane focus <pane>
+leap-chorus pane zoom <pane> --on        # --off, or neither to toggle
+leap-chorus pane close <pane>
+```
+
+None of these start a daemon: asking about panes that would not exist should say so,
+not create them. They exit 1 when no daemon is running and 2 on a bad invocation.
+
 ## Agent states
 
 ![The sidebar, the agent list, and renaming a workspace](screenshots/agents-sidebar.png)
