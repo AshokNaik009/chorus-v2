@@ -11,7 +11,7 @@ estimated, and not rounded in our favour.
   16 ms.
 - Real detached daemon over a real unix socket, real PTYs. Frames go to a counting
   sink rather than a TTY: writing to a terminal measures the terminal.
-- **Full UI drawn**: sidebar (22 columns), tab bar, status bar. PHASE-4 criterion 7
+- **Full UI drawn**: sidebar (22 columns), tab bar, status bar. `phases/archive/PHASE-4.md` criterion 7
   asks for this specifically, so the config is pinned in the benchmark rather than
   inherited from whoever runs it. Panes therefore get 178 of the 200 columns and
   48 of the 50 rows.

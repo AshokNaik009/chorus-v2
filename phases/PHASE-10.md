@@ -52,15 +52,66 @@ from a git repository. `scripts/fetch-or-build.sh` fetches a prebuilt binary or
 falls back to `cargo build`. That means a Rust toolchain requirement this project
 does not otherwise have, and a supply-chain decision this project has not made.
 
+## What orca already knows — and it is the reason to think twice
+
+Measured **2026-09-20** at orca `061a756b84`. **Orca already answered decision 1
+below with "yes", and the price is on disk: 9,914 non-test lines** across
+`src/main/plugins/` and `src/shared/plugins/` (14,001 + 4,093 including tests).
+That is not a plugin *loader*. That is what "yes" costs once it is taken
+seriously, and it is the single most useful number in this document — bigger
+than herdr's own 8,882 lines of Rust, in the same language we would write.
+
+What the 9,914 lines are spent on is the part worth reading before deciding:
+
+| Concern | Orca files |
+|---|---|
+| Capability model, declared in the manifest and enforced at every boundary | `plugin-capabilities.ts`, `plugin-capability-gate.ts` |
+| User consent, fingerprinted so a changed manifest re-asks | `plugin-consent-request.ts`, `plugin-consent-fingerprint.ts` |
+| Install trust, provenance, content hashing, lockfiles | `plugin-install-trust.ts`, `plugin-install-provenance.ts`, `plugin-content-hash.ts`, `plugin-install-lockfile.ts` |
+| Revoking a plugin **after** it is installed | `plugin-kill-list.ts`, `plugin-kill-list-service.ts` |
+| Out-of-process workers: slot pools, restart loops, output budgets, supervision | `plugin-worker-*.ts` (14 files) |
+| Audit log, secrets store, path safety | `plugin-audit-log.ts`, `plugin-secrets-store.ts`, `plugin-path-safety.ts` |
+
+Three specifics that are cheap to copy and expensive to invent:
+
+- **A closed set of capability kinds, not an open string.** Orca's v0 is seven
+  unscoped kinds (`workspace:read`, `terminal:send`, `notifications:show`,
+  `storage`, `secrets`, `events:subscribe`, `settings:own`), each shipped with
+  one plain-language line shown verbatim in the consent dialog. A typo, or a
+  capability from a newer version, **fails manifest validation instead of
+  silently granting nothing** — the failure mode an open set gives you is a
+  plugin that appears to work and quietly cannot.
+- **Consent is fingerprinted over a canonical encoding.** `canonicalizeCapabilitySet`
+  sorts and de-duplicates so reformatting the manifest does not re-prompt, and
+  key-sorts so no two encodings of the same grant can exist. Without that, "we
+  asked the user" is not a claim you can check.
+- **A kill list is how a bad plugin stops running on machines you do not own.**
+  Orca fetches a signed, versioned list and refuses entries newer than 24 hours
+  ahead of the clock — "a far-future `generatedAt` makes every genuine later
+  list look older and disables revocation permanently". If there is no kill
+  list, the honest statement in the handoff is that a compromised plugin stays
+  installed until each user removes it by hand.
+
+**None of this makes a case against the phase.** It makes the case that the
+phase's real content is the security model, not the five shim commands — and
+that a `plugin install` without an answer to revocation is `curl | sh` with a
+progress bar. If that is the chosen trade-off, it should be written down as
+such, not discovered later.
+
 ## Decide these before writing code
 
 1. **Does `leap-chorus` execute code fetched from a URL on a user's say-so?**
-   Every plugin manager answers yes; this project has never had to. Write the
-   answer in PLAN.md as a key decision, whichever way it goes.
+   Every plugin manager answers yes; this project has never had to. Orca's yes
+   is ~10k lines. Write the answer in PLAN.md as a key decision, whichever way
+   it goes, **with the number next to it.**
 2. **Pinning and verification.** herdr-file-viewer's tags carry SHA-256-verified
    binaries. If installs are unpinned, `plugin install` is `curl | sh` with extra
-   steps.
-3. **Is the `herdr` shim honest?** A binary named `herdr` that is not herdr will
+   steps. Orca's `plugin-content-hash.ts` and `plugin-install-lockfile.ts` are
+   the shape of "pinned".
+3. **Revocation.** Not in the original three, and it should have been. If a
+   plugin turns out to be malicious after a hundred people installed it, what
+   happens? "Nothing" is an acceptable answer only if it is written down.
+4. **Is the `herdr` shim honest?** A binary named `herdr` that is not herdr will
    confuse someone eventually. A `--compat herdr` flag on our own binary, with
    `$HERDR_BIN_PATH` pointed at a small generated wrapper, is the same mechanism
    without the impersonation.
@@ -78,6 +129,9 @@ scripts/herdr-compat.mjs                  # the $HERDR_BIN_PATH shim
 **Bound plugin output and lifetime.** herdr caps at 64 KiB and 32 in-flight
 commands (`PLUGIN_COMMAND_OUTPUT_MAX_BYTES`, `MAX_PLUGIN_COMMANDS_IN_FLIGHT` in
 `runtime.rs`). Those numbers exist because a plugin is someone else's code.
+Orca reached the same place independently — `plugin-worker-output-buffer.ts`,
+`plugin-worker-output-retention.ts`, `plugin-worker-restart-loop.ts` — which is
+about as strong as agreement gets on a number nobody can derive.
 
 **A plugin's pane is an ordinary pane.** `pane.split` with a command already does
 this. Do not grow a second kind of pane.
@@ -92,8 +146,14 @@ this. Do not grow a second kind of pane.
 5. The shim answers all five commands the launchers use.
 6. A plugin whose build fails is reported and leaves nothing half-installed.
 7. Output over the cap is truncated and reported, not buffered.
-8. `herdr-file-viewer` installs and opens on macOS or Linux. This is the only
-   criterion requiring the network; say in the handoff what version was tested.
+8. An install is pinned: the same `plugin install` twice fetches the same bytes,
+   and a changed artifact at the same ref is refused rather than installed.
+   (Skip only if decision 2 was answered "unpinned" — and then say so here.)
+9. Whatever decision 3 chose about revocation is exercised by a test, including
+   when the choice was "nothing happens": a test that documents the gap is worth
+   more than a criterion quietly dropped.
+10. `herdr-file-viewer` installs and opens on macOS or Linux. This is the only
+    criterion requiring the network; say in the handoff what version was tested.
 
 ## Do NOT do in this phase
 
@@ -107,7 +167,7 @@ this. Do not grow a second kind of pane.
 
 Write `../HANDOFF.md` from `HANDOFF-TEMPLATE.md`. Beyond the template:
 
-- The answers to the three decisions above, and where they landed in PLAN.md
+- The answers to the four decisions above, and where they landed in PLAN.md
 - The manifest subset honoured, and what is ignored
 - Exactly what `plugin install` executes, and what a user is trusting
 - Which plugins were tested, at which versions
