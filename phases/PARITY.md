@@ -1,8 +1,8 @@
-# herdr-sidebar parity — the checklist phases 7-9 are measured against
+# herdr-sidebar parity — the checklist the sidebar phases are measured against
 
 **The port target is herdr-sidebar.** This file is the inventory: every feature
-it advertises, whether herdr-ts has it, and which phase owns it. Phases 7-9 are
-*how* we get there; this is *what done means*.
+it advertises, whether herdr-ts has it, and which phase owns it. Phases 7, 8, 9
+and 11 are *how* we get there; this is *what done means*.
 
 Orca (`/Users/ashoknaik/claude-experiments/orca`, MIT) is **not** a parity
 target and never appears in this table. It is a solutions library — when we need
@@ -65,16 +65,16 @@ user, plus the view enums in `scm_app.rs` and `explorer_app.rs`.
 | Scrolling changes list | **done** | |
 | One commit box **per repository** (multi-repo) | **orphan** | we follow one pane into one repo |
 | AI commit draft (`A`, ✧) via local `claude` CLI | phase 9 | `suggest.rs`, with filename fallback |
-| Browse **commits** | **orphan** | `Drawer::Commits` |
-| Browse **file history** | **orphan** | `Drawer::FileHistory` |
-| Browse **graph** | **orphan** | `Drawer::Graph` |
-| Browse **branches** (as a drawer, not the picker) | **orphan** | `Drawer::Branches` |
-| Browse **worktrees** | **orphan** | RPCs already exist: `worktree.list/create/open/remove` |
-| Browse **remotes** | **orphan** | `Drawer::Remotes` |
-| Browse **stashes** | **orphan** | `Drawer::Stashes` |
-| Browse **tags** | **orphan** | `Drawer::Tags` |
+| Browse **commits** | phase 11 | `Drawer::Commits` |
+| Browse **file history** | phase 11 | `Drawer::FileHistory` |
+| Browse **graph** | phase 11 | `Drawer::Graph` |
+| Browse **branches** (as a drawer, not the picker) | phase 11 | `Drawer::Branches` |
+| Browse **worktrees** | phase 11 | RPCs already exist: `worktree.list/create/open/remove` |
+| Browse **remotes** | phase 11 | `Drawer::Remotes` |
+| Browse **stashes** | phase 11 | `Drawer::Stashes` |
+| Browse **tags** | phase 11 | `Drawer::Tags` |
 | Compact Git footer in every view | **orphan** | branch + sync visible outside the SCM view |
-| Context menu (`m`) | **orphan** | |
+| Context menu (`m`) | phase 11 | drawer row menus; the changes-list menu is phase 9 |
 
 ## Preview
 
@@ -114,37 +114,45 @@ focus event. herdr-ts owns its own panes, so roughly **3,000 lines of
 herdr-sidebar have no counterpart here by construction.** That is the single
 biggest reason the port is smaller than the 26,496-line source.
 
-## The orphans — read this before planning phase 9
+## The orphans — what is still unowned
 
-**Nineteen rows above are marked orphan, and the largest cluster is the eight
-Source Control drawers.** They are not an oversight of this table; PHASE-7 ruled
-them out explicitly:
+**Eight rows above are still orphans: not built, and no phase owns them.**
+
+The largest cluster used to be the eight Source Control drawers. PHASE-7 ruled
+them out explicitly —
 
 > No commit history, file history, stashes, tags or remotes browsing. Later, if
 > ever — they are the least-used third of `scm_app.rs`.
 
-That was a reasonable call for phase 7 and it is **not** a reasonable resting
-place for the port, because herdr-sidebar's README lists them as a headline
-feature: *"Browse commits, file history, branches, worktrees, remotes, stashes,
-and tags."* Phases 8, 9 and 10 do not mention them. As the plan stands, they
-never get built and nobody ever decides not to build them.
+— which was reasonable for phase 7 and was not a reasonable resting place for
+the port, because herdr-sidebar's README lists them as a headline feature and
+phases 8-10 never picked them up. **Resolved: they are now `PHASE-11.md`**, a
+phase whose whole job is to turn those rows green and which is independent of
+phase 10.
 
-Three ways out, and one of them has to be chosen rather than defaulted into:
+What remains unowned, and what each one probably needs:
 
-1. **Fold the drawers into phase 9.** They are mostly read-only `git log` /
-   `git stash list` / `git tag` views over a list widget that already exists,
-   and `worktree.*` RPCs are already shipped. Cheapest in code, but phase 9 is
-   already the largest of the three.
-2. **Add a phase 11.** Honest about the size; delays "parity" by one phase.
-3. **Declare them out of scope for v1** in PLAN.md's key-decisions table, with
-   the reasoning, so a future reader knows it was weighed and not forgotten.
+| Orphan | Where it likely belongs |
+|---|---|
+| Explorer hover actions | phase 9, with the icon/chrome work |
+| Explorer context menu (`m`) | phase 9 — the widget exists in `prompt.ts` |
+| Manually chosen folder stays put | phase 9, with `[sidebar]` settings |
+| Compact Git footer in every view | phase 9 — it is chrome, not git |
+| Auto-open / strict toggle / focus-on-open | phase 9, same settings block |
+| Ephemeral preview tab, double-click to pin | needs a tab model we may not want; decide in phase 9 |
+| Mouse selection + clipboard copy in preview | blocked on the clipboard decision `PHASE-11.md` also raises (OSC 52) |
+| One commit box per repository (multi-repo) | **probably a divergence, not a gap** — see below |
 
-The other orphans are smaller and mostly cluster in phase 9's territory
-(context menus, hover actions, the Git footer, auto-open behaviour). Multi-repo
-is the exception: `HANDOFF.md` already argues that following the focused pane
-into exactly one repository is *the right shape for a multiplexer*, which is a
-deliberate divergence, not a gap. If that argument holds, move that row from
-orphan to a recorded divergence in PLAN.md.
+**Multi-repo is the one to settle rather than schedule.** `HANDOFF.md` already
+argues that following the focused pane into exactly one repository is *the right
+shape for a multiplexer*, where switching pane switches repository. If that
+argument holds, move it out of this table and into the divergences below. It is
+listed as an orphan only because nobody has written the decision down.
+
+Six of the remaining eight land in phase 9. That is worth noticing before
+planning it: phase 9 is already the largest of the sidebar phases, and this
+would add chrome, settings and menu work to a phase that is mostly about
+preview. Splitting it is a legitimate call.
 
 ## Deliberate divergences from herdr-sidebar
 

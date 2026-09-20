@@ -4,9 +4,12 @@
 
 **The port target is herdr-sidebar.** This phase owns the largest block of
 still-red rows in `PARITY.md` — preview, icons, docking, `[sidebar]` settings
-and the AI commit draft — and it is also where the **orphans** have to be
-resolved one way or the other. Read that file's closing section before
-planning. Orca appears below as a solutions library only.
+and the AI commit draft. **Six of the eight remaining orphans also land here**
+(context menus, hover actions, the Git footer, auto-open/strict/focus-on-open,
+the manually-pinned folder, and the ephemeral-preview-tab question), which may
+well make this phase too big; read that file's closing section before planning,
+and splitting it is a legitimate call. The Source Control drawers are **not**
+here — they are phase 11. Orca appears below as a solutions library only.
 
 ## Why this phase
 

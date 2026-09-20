@@ -20,9 +20,10 @@ herdr, not to this project.
 | What | Path | License | Use it for |
 |---|---|---|---|
 | herdr | `/Users/ashoknaik/claude-experiments/herdr` | Apache-2.0 | Product logic, layout tree, input parsing, detection manifests |
-| orca | `/Users/ashoknaik/claude-experiments/orca` | MIT | Runtime architecture: daemon, PTY ownership, process table, ssh2 |
+| herdr-sidebar | `/Users/ashoknaik/claude-experiments/herdr-sidebar` | MIT | **The port target for phases 7-9 and 11.** Explorer, Search and Source Control — what each feature should do |
+| orca | `/Users/ashoknaik/claude-experiments/orca` | MIT | Runtime architecture (phases 1-5), and the *mechanics* of building a subsystem in Node — see below |
 
-Both are permissively licensed. Derive freely; keep attribution in `NOTICE`.
+All three are permissively licensed. Derive freely; keep attribution in `NOTICE`.
 
 Every line count and file path quoted in these phase docs was checked against
 these two checkouts on **2026-09-19**, at herdr `3f2a6e74`
@@ -81,6 +82,7 @@ committed, verified code and a `HANDOFF.md` the next session reads.
 | 8 | Search, navigation, activity bar | You stop leaving the terminal | 2-3 wk |
 | 9 | Preview, icons, settings | It is pleasant, not just correct | 2-3 wk |
 | 10 | herdr plugin host | *Optional.* Decide before starting | 2-4 wk |
+| 11 | Source Control drawers | herdr-sidebar parity is actually reached | 1-2 wk |
 
 `phases/` holds only the live phases. Phases 1-5 are done and their docs moved to
 `phases/archive/`, which has a README saying what each one produced and which
@@ -92,16 +94,24 @@ draft of that table claimed, so the 15k budget for `core/` is the softest
 number in this plan.
 Remote SSH attach is deliberately **phase 6**, not squeezed into 5.
 
-Phases 7-9 port **herdr-sidebar** (`/Users/ashoknaik/claude-experiments/herdr-sidebar`, MIT) —
-a file explorer and source-control panel — onto the multiplexer. A first slice landed
-outside the phase system; `HANDOFF.md` says what, and what it got wrong. They do not
-depend on phase 6 and phase 6 does not depend on them. Phase 10 is an alternative to
-7-9's approach, not a continuation of it: read its opening before starting it.
+Phases 7-9 and 11 port **herdr-sidebar** — a file explorer and source-control panel —
+onto the multiplexer. A first slice landed outside the phase system; `HANDOFF.md` says
+what, and what it got wrong. They do not depend on phase 6 and phase 6 does not depend
+on them. Phase 10 is an alternative to their approach, not a continuation of it: read
+its opening before starting it.
+
+**Phase 11 finishes the port.** It exists because `PARITY.md` found that
+herdr-sidebar's eight Source Control drawers — commits, file history, graph,
+branches, worktrees, remotes, stashes, tags — were a headline feature that
+PHASE-7 deferred and no later phase picked up. It is independent of phase 10
+and can run before it. The sidebar port is phases **7, 8, 9 and 11**; phase 10
+is the road not taken.
 
 **`phases/PARITY.md` is the scoreboard.** It lists every feature herdr-sidebar
-advertises, whether herdr-ts has it, and which phase owns it. "Phases 7-9 are
-done" is not the same claim as "we have parity", and that file is where the
-difference is tracked — including the rows **no phase currently owns**.
+advertises, whether herdr-ts has it, and which phase owns it. "The sidebar
+phases are done" is not the same claim as "we have parity", and that file is
+where the difference is tracked — including the eight rows **no phase currently
+owns**.
 
 ### herdr-sidebar is the target; orca is a solutions library
 
