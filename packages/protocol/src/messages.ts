@@ -57,6 +57,10 @@ import type {
   WorktreeCreateParams,
   WorktreeCreateResult,
   WorktreeListParams,
+  GitCommitParams,
+  GitPathsParams,
+  GitStatusParams,
+  GitStatusResult,
   WorktreeListResult,
   WorktreeOpenParams,
   WorktreeOpenResult,
@@ -404,6 +408,12 @@ export interface AgentMethodMap {
   'config.set_theme': { params: ConfigSetThemeParams; result: ConfigSetThemeResult }
   'config.set': { params: ConfigSetParams; result: ConfigSetResult }
 
+  'git.status': { params: GitStatusParams; result: GitStatusResult }
+  'git.stage': { params: GitPathsParams; result: GitStatusResult }
+  'git.unstage': { params: GitPathsParams; result: GitStatusResult }
+  'git.discard': { params: GitPathsParams; result: GitStatusResult }
+  'git.commit': { params: GitCommitParams; result: GitStatusResult }
+
   'worktree.list': { params: WorktreeListParams; result: WorktreeListResult }
   'worktree.create': { params: WorktreeCreateParams; result: WorktreeCreateResult }
   'worktree.open': { params: WorktreeOpenParams; result: WorktreeOpenResult }
@@ -421,6 +431,11 @@ export const AGENT_METHODS = [
   'agent.reload_manifests',
   'config.set_theme',
   'config.set',
+  'git.status',
+  'git.stage',
+  'git.unstage',
+  'git.discard',
+  'git.commit',
   'worktree.list',
   'worktree.create',
   'worktree.open',

@@ -13,6 +13,17 @@ herdr. Apache-2.0 requires retaining the license text and attribution notices in
 derived files; herdr ships no NOTICE of its own, so reproducing its LICENSE here
 plus a provenance line in each derived file satisfies that.
 
+The bundled notification sounds in `assets/sounds/` are herdr's
+(`assets/sounds/done.mp3`, `request.mp3`), used under the same licence.
+
+--------------------------------------------------------------------------------
+herdr-sidebar — https://github.com/alexarthurs/herdr-sidebar
+Licensed under the MIT License.
+
+`packages/daemon/src/git.ts` ports that project's `src/git.rs` porcelain parsing:
+the status letter rules, rename-source handling, conflict set, and the branch and
+ahead/behind header parsing. Its MIT notice travels with that derivation.
+
 --------------------------------------------------------------------------------
 orca — Copyright (c) 2026 Lovecast Inc.
 Licensed under the MIT License.

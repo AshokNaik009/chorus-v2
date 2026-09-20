@@ -32,7 +32,9 @@ import * as model from './rpc/session-model.js'
 import type { AgentDetector } from '@leap-chorus/detect'
 
 import * as agents from './rpc/agents.js'
+import * as gitRpc from './rpc/git.js'
 import * as worktrees from './rpc/worktrees.js'
+import { GitService } from './git.js'
 import { WorktreeService } from './worktree.js'
 import type { IntegrationOptions } from './integration/install.js'
 import { RequestError as ModelRequestError, type Params } from './rpc/params.js'
@@ -105,6 +107,8 @@ export class DaemonServer {
   readonly startedAt = Date.now()
   /** Git worktrees. Stateless: every read shells out. See worktree.ts. */
   private readonly worktreeService = new WorktreeService()
+  /** Working-tree git: status, staging, commits. Stateless for the same reason. */
+  private readonly gitService = new GitService()
   /** The session model: workspaces, tabs, panes. See runtime.ts. */
   readonly runtime: SessionRuntime
   private config: LoadedConfig
@@ -513,6 +517,16 @@ export class DaemonServer {
       }
 
       // --- worktrees and integrations (PHASE-5 Part B) ----------------------
+      case 'git.status':
+        return gitRpc.gitStatus({ git: this.gitService }, params)
+      case 'git.stage':
+        return gitRpc.gitStage({ git: this.gitService }, params)
+      case 'git.unstage':
+        return gitRpc.gitUnstage({ git: this.gitService }, params)
+      case 'git.discard':
+        return gitRpc.gitDiscard({ git: this.gitService }, params)
+      case 'git.commit':
+        return gitRpc.gitCommit({ git: this.gitService }, params)
       case 'worktree.list':
         return worktrees.worktreeList(this.worktreeContext(), params)
       case 'worktree.create':

@@ -461,6 +461,52 @@ export interface WorktreeRecord {
   readonly paneIds: readonly string[]
 }
 
+// ---------------------------------------------------------------------------
+// Source control
+// ---------------------------------------------------------------------------
+
+/** One changed path on one side of the index. */
+export interface GitFileEntry {
+  /** Repo-relative, as git prints it. */
+  readonly path: string
+  /** The rename or copy source, when there is one. */
+  readonly origin: string | null
+  /** `M`, `A`, `D`, `R`, `C`, `U` for untracked, or `!` for a conflict. */
+  readonly letter: string
+}
+
+/**
+ * A repository's working-tree state.
+ *
+ * Every source-control method returns this, not an acknowledgement: staging changes
+ * both lists at once, so a caller that had to re-read would always re-read.
+ */
+export interface GitStatusResult {
+  readonly root: string
+  readonly branch: string
+  readonly staged: readonly GitFileEntry[]
+  readonly unstaged: readonly GitFileEntry[]
+  readonly ahead: number
+  readonly behind: number
+  readonly hasUpstream: boolean
+}
+
+export interface GitStatusParams {
+  /** Any path inside the repository; the root is resolved from it. */
+  readonly cwd: string
+}
+
+export interface GitPathsParams {
+  readonly cwd: string
+  /** Repo-relative paths. Empty means every changed path, except for `git.discard`. */
+  readonly paths?: readonly string[]
+}
+
+export interface GitCommitParams {
+  readonly cwd: string
+  readonly message: string
+}
+
 export interface WorktreeListParams {
   /** Any path inside the repository. Defaults to the focused pane's cwd. */
   readonly repo?: string
