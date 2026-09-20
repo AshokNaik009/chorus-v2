@@ -1,0 +1,9 @@
+packages:
+  - 'packages/*'
+  - 'bench'
+
+# node-pty compiles a native addon; esbuild fetches its platform binary. Both are
+# required, so approve them explicitly rather than leaving install half-done.
+onlyBuiltDependencies:
+  - esbuild
+  - node-pty

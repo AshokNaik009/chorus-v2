@@ -1,0 +1,12 @@
+{
+  "name": "@leap-chorus/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@leap-chorus/client": "workspace:*",
+    "@leap-chorus/daemon": "workspace:*",
+    "@leap-chorus/protocol": "workspace:*",
+    "@leap-chorus/tui": "workspace:*"
+  }
+}

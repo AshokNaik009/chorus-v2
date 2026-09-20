@@ -1,0 +1,41 @@
+leap-chorus
+Copyright 2026 the leap-chorus authors
+
+This product includes software derived from two upstream projects.
+
+--------------------------------------------------------------------------------
+herdr — https://github.com/herdrdev/herdr
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+leap-chorus is a TypeScript rewrite of herdr. Product logic — the multiplexer model,
+the layout tree, input parsing, and the agent detection manifests — derives from
+herdr. Apache-2.0 requires retaining the license text and attribution notices in
+derived files; herdr ships no NOTICE of its own, so reproducing its LICENSE here
+plus a provenance line in each derived file satisfies that.
+
+--------------------------------------------------------------------------------
+orca — Copyright (c) 2026 Lovecast Inc.
+Licensed under the MIT License.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+leap-chorus takes its runtime architecture from orca: the daemon/client split, PTY
+ownership by a detached versioned daemon, NDJSON framing over a unix socket, and
+the `@xterm/headless` emulator-per-pane approach. Files deriving from orca name it
+in a header comment.

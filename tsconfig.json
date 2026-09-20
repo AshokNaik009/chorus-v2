@@ -1,0 +1,32 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/protocol"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/config-loader"
+    },
+    {
+      "path": "./packages/detect"
+    },
+    {
+      "path": "./packages/daemon"
+    },
+    {
+      "path": "./packages/tui"
+    },
+    {
+      "path": "./packages/input"
+    },
+    {
+      "path": "./packages/client"
+    },
+    {
+      "path": "./bench"
+    }
+  ]
+}

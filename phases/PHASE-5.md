@@ -144,6 +144,39 @@ this is not a Bun-specific trap, Bun just can't paper over it.
   the new version alongside and migrates sessions. Re-verify the phase-1
   survival test against a real version bump.
 
+## Part D — The rebrand to `leap-chorus`
+
+The product ships as **leap-chorus**, not herdr-ts. `herdr-ts` is the working
+name for phases 1-4 only. The rename lands here, with packaging, for one
+reason: the name is baked into things that are expensive to change *after*
+someone has installed them, and cheap to change before. Renaming earlier would
+have meant renaming twice.
+
+Do it as one mechanical pass before the build matrix, not sprinkled through the
+phase. Everything below carries the name today (verified 2026-09-19):
+
+| What | From | To |
+|---|---|---|
+| Workspace packages | `@herdr-ts/{protocol,daemon}` | `@leap-chorus/{protocol,daemon}` |
+| Root package | `herdr-ts` | `leap-chorus` |
+| Daemon entrypoint | `herdr-tsd` | `leap-chorusd` |
+| Probe CLI | `herdr-probe` | gone — deleted in phase 2 |
+| Data root | `~/.herdr`, `$XDG_DATA_HOME/herdr` | `~/.leap-chorus`, `$XDG_DATA_HOME/leap-chorus` |
+| Env vars | `HERDR_DATA_DIR`, `HERDR_DAEMON_ENTRY` | `LEAP_CHORUS_*` |
+| Error codes | `herdr_instance_lock_held`, etc. | `leap_chorus_*` (7 codes in `errors.ts`, 8 in `protocol/messages.ts`) |
+| Socket / lock / log | `daemon-v<N>.{sock,lock,log}` | unchanged — they live under the renamed root |
+
+Two things that are not just find-and-replace:
+
+- **The data root move is a migration, not a rename.** Any pre-v1 install has
+  live sessions under the old root. Either migrate on first start or state
+  plainly that pre-v1 roots are abandoned — do not silently leave a running
+  daemon orphaned under a path nothing looks at any more.
+- **Re-measure the `sun_path` budget.** `~/.leap-chorus/daemon/daemon-v1.sock`
+  is 6 bytes longer than the phase-1 path. It still fits with room to spare (see
+  `HANDOFF.md` for the measured table), but `assertSocketPathFits()` is there to
+  be trusted, not assumed — run the phase-1 path test after the rename.
+
 ## Acceptance criteria
 
 1. `pnpm test` green.
@@ -165,6 +198,9 @@ this is not a Bun-specific trap, Bun just can't paper over it.
    references no symbol version above the floor. A green build on a newer
    runner is not evidence.
 9. The phase-1 survival test passes across an actual client version bump.
+10. The rebrand is complete: `grep -ri herdr` over the source tree returns only
+    attribution in `NOTICE` and provenance comments in derived files. The
+    phase-1 `sun_path` test passes against the renamed data root.
 
 ## Do NOT do in this phase
 

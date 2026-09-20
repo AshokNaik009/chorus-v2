@@ -1,0 +1,193 @@
+name: release
+
+# Builds the six platform tarballs and proves each one runs on the *oldest* distro in
+# its stated floor — not on the runner that built it.
+#
+# PHASE-5 criteria 7 and 8 are the whole point of this file:
+#
+#   7. Tarballs build for every slot and run on a clean machine (no node, no pnpm, no
+#      python, no C++ toolchain). "Clean" means a stock container image of the oldest
+#      distro in the stated floor — Ubuntu 20.04 for glibc, Alpine for musl.
+#   8. The glibc floor is asserted in CI. A green build on a newer runner is not
+#      evidence.
+#
+# The two halves are deliberately separate jobs. `build` runs *inside* the oldest
+# image, so the compiler it uses cannot emit a symbol the target lacks; `smoke` unpacks
+# the artifact into a pristine container that has never seen this repository. A build
+# job that also tested itself would be testing the box that already has the toolchain.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      slots:
+        description: 'Comma-separated slots to build, or "all"'
+        default: all
+
+permissions:
+  contents: read
+
+env:
+  # Ubuntu 20.04 / Debian 11 / RHEL 9. Moving this is a support decision, not a build
+  # detail, so it lives here and in check-glibc-floor.mjs and nowhere else.
+  GLIBC_FLOOR: '2.31'
+  NODE_VERSION: '22.20.0'
+
+jobs:
+  build:
+    name: build ${{ matrix.slot }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The libc label comes from the container, never from runtime detection:
+          # a binary does not get to be wrong about its own libc.
+          - slot: linux-x64-glibc
+            runner: ubuntu-24.04
+            container: ubuntu:20.04
+            arch: x64
+          - slot: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+            container: ubuntu:20.04
+            arch: arm64
+          - slot: linux-x64-musl
+            runner: ubuntu-24.04
+            container: alpine:3.18
+            arch: x64
+          - slot: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            container: alpine:3.18
+            arch: arm64
+          - slot: darwin-x64
+            runner: macos-13
+            arch: x64
+          - slot: darwin-arm64
+            runner: macos-14
+            arch: arm64
+    container: ${{ matrix.container }}
+    steps:
+      - name: install build prerequisites (glibc image)
+        if: startsWith(matrix.container, 'ubuntu')
+        run: |
+          apt-get update
+          # Toolchain for building node-pty's addon, and only here: the *shipped*
+          # tarball must need none of it.
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential python3 curl xz-utils ca-certificates git
+
+      - name: install build prerequisites (musl image)
+        if: startsWith(matrix.container, 'alpine')
+        run: apk add --no-cache build-base python3 curl xz nodejs npm git libc6-compat
+
+      - uses: actions/checkout@v4
+
+      - name: pin the node runtime
+        shell: bash
+        run: |
+          set -eux
+          case "${{ runner.os }}-${{ matrix.arch }}" in
+            Linux-x64) TRIPLE=linux-x64 ;;
+            Linux-arm64) TRIPLE=linux-arm64 ;;
+            macOS-x64) TRIPLE=darwin-x64 ;;
+            macOS-arm64) TRIPLE=darwin-arm64 ;;
+          esac
+          # Alpine is not glibc, so nodejs.org's Linux builds do not run there; the
+          # distro's own node is the pinned runtime for a musl slot.
+          if [ "${{ matrix.slot }}" != "${{ matrix.slot#*musl}}" ]; then
+            mkdir -p pinned-node/bin
+            cp "$(command -v node)" pinned-node/bin/node
+          else
+            curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${TRIPLE}.tar.xz" -o node.tar.xz
+            mkdir -p pinned-node
+            tar -xJf node.tar.xz -C pinned-node --strip-components=1
+          fi
+          echo "PATH=$PWD/pinned-node/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: build and test
+        run: pnpm test
+
+      - name: build the native addon for this slot
+        # Upstream node-pty 1.1.0 ships no Linux prebuilds (verified 2026-09-19:
+        # darwin-arm64, darwin-x64, win32-arm64, win32-x64 only), so every Linux slot
+        # compiles its own here, with patches/node-pty@1.1.0.patch applied by pnpm.
+        if: startsWith(matrix.slot, 'linux')
+        run: |
+          set -eux
+          cd "$(node -p "require('path').dirname(require.resolve('node-pty/package.json', { paths: ['packages/daemon'] }))")"
+          npx node-gyp rebuild
+          mkdir -p "prebuilds/linux-${{ matrix.arch }}"
+          cp build/Release/pty.node "prebuilds/linux-${{ matrix.arch }}/"
+          cp build/Release/spawn-helper "prebuilds/linux-${{ matrix.arch }}/"
+
+      - name: assert the glibc floor
+        # Criterion 8. Runs before packaging so a violating binary is never archived.
+        if: endsWith(matrix.slot, '-glibc')
+        run: |
+          set -eux
+          PTY=$(node -p "require('path').join(require('path').dirname(require.resolve('node-pty/package.json', { paths: ['packages/daemon'] })), 'prebuilds/linux-${{ matrix.arch }}/pty.node')")
+          node scripts/check-glibc-floor.mjs "$PTY" --floor "$GLIBC_FLOOR"
+
+      - name: package
+        run: node scripts/package-tarball.mjs --slot ${{ matrix.slot }} --node-dir "$PWD/pinned-node"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.slot }}
+          path: dist-release/*.tar.gz
+          if-no-files-found: error
+
+  smoke:
+    name: smoke ${{ matrix.slot }} on ${{ matrix.image }}
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest distro in the floor, stock. No node, no pnpm, no python, no
+          # compiler — if the tarball needs any of them, it fails here.
+          - slot: linux-x64-glibc
+            runner: ubuntu-24.04
+            image: ubuntu:20.04
+          - slot: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+            image: ubuntu:20.04
+          - slot: linux-x64-musl
+            runner: ubuntu-24.04
+            image: alpine:3.18
+          - slot: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            image: alpine:3.18
+          - slot: darwin-x64
+            runner: macos-13
+            image: host
+          - slot: darwin-arm64
+            runner: macos-14
+            image: host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.slot }}
+          path: dist-release
+
+      - name: run it on a clean machine
+        shell: bash
+        run: |
+          set -eux
+          TARBALL=$(ls dist-release/*.tar.gz)
+          if [ "${{ matrix.image }}" = "host" ]; then
+            # macOS runners have no container runtime; the closest to "clean" is an
+            # empty environment with no node on PATH.
+            bash scripts/smoke-tarball.sh "$TARBALL"
+          else
+            docker run --rm -v "$PWD:/w" -w /w ${{ matrix.image }} \
+              sh -c 'sh scripts/smoke-tarball.sh '"$TARBALL"
+          fi

@@ -1,0 +1,43 @@
+# Ported from herdr `src/detect/manifests/opencode.toml` (Apache-2.0, herdr 3f2a6e74),
+# unchanged except for this header. The rules are a compatibility claim about the
+# agent's current CLI, so they are kept as upstream data rather than rewritten.
+
+id = "opencode"
+version = "2026.06.10.1"
+min_engine_version = 1
+updated_at = "2026-06-10T00:00:00Z"
+# `herdr:opencode` upstream: an integration source id from the project these
+# rules came from. Ours is named for this product, since it is our hook that sends it.
+aliases = ["open-code", "leap-chorus:opencode"]
+
+[[rules]]
+id = "permission_required"
+state = "blocked"
+priority = 300
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["△ Permission required"] },
+  { contains = ["esc dismiss"], any = [{ contains = ["enter confirm"] }, { contains = ["enter submit"] }, { contains = ["enter toggle"] }], all = [{ any = [{ contains = ["↑↓ select"] }, { contains = ["⇆ tab"] }] }] },
+]
+
+[[rules]]
+id = "interrupt_hint_working"
+state = "working"
+priority = 110
+region = "whole_recent"
+visible_working = true
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["ctrl+c to interrupt"] },
+  { contains = ["press esc to interrupt"] },
+  { line_regex = ['(?i).*opencode.*esc (again to )?interrupt'] },
+]
+
+[[rules]]
+id = "progress_bar_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+visible_working = true
+regex = ['(■|⬝){4,}']

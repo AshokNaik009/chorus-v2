@@ -66,6 +66,7 @@ shared-mutex concurrency model that has no TypeScript equivalent.
 | Own cell-buffer renderer, not Ink/OpenTUI | Ink's refresh rate is locked to 30fps and it rebuilds the whole output on every state change. herdr's entire ratatui surface is **24 unique identifiers**; this layer is small. See PHASE-2 for the full list and the OpenTUI numbers. |
 | No kitty graphics in v1 | `src/kitty_graphics.rs` is 1,509 lines, plus call sites in ~20 other files, all against Ghostty's API. No TS path. Revisit later. |
 | Node 24, not Node 20 | Node 20 reached EOL on **2026-04-30**. Node 24 is Active LTS, 22 is Maintenance LTS, 26 is Current. Pin `engines.node: "24"` (orca does) and set the floor at 22. |
+| Ship as `leap-chorus`, but rename in **phase 5**, not now | `herdr-ts` is the working name for phases 1-4. The name is baked into package names, the data root, env vars, and error codes — cheap to change before anyone has installed it, expensive after. Renaming before packaging would mean renaming twice. See PHASE-5 Part D for the full checklist. |
 
 ## Phases
 

@@ -1,5 +1,51 @@
+# --- dependencies -----------------------------------------------------------
 node_modules/
+
+# --- build output -----------------------------------------------------------
+# `dist/` with no leading slash matches every package's tsc output, not just one
+# at the root. Nothing in the source tree is named `dist`, so this is safe.
 dist/
 out/
 *.tsbuildinfo
+
+# The bundled app (`scripts/build-app.mjs`) and the platform tarballs
+# (`scripts/package-tarball.mjs`). The latter carries a whole pinned Node runtime
+# and runs to ~144 MB per slot, so it is the one entry here that really matters.
+dist-app/
+dist-release/
+
+# The pinned Node the release workflow downloads next to the checkout.
+pinned-node/
+node-v*-*.tar.xz
+node.tar.xz
+
+# --- local, not shared ------------------------------------------------------
+# Local PRDs, planning notes and scratch work. Deliberately never tracked.
+.local/
+
+# --- test and tooling -------------------------------------------------------
+coverage/
+*.log
+.eslintcache
+.vitest-cache/
+
+# --- environment ------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- editors and OS ---------------------------------------------------------
 .DS_Store
+.idea/
+*.swp
+
+# --- deliberately NOT ignored -----------------------------------------------
+# Listed because each looks generated and is not, and a broader rule would have
+# swallowed them:
+#
+#   packages/detect/src/bundled.ts    generated from manifests/*.toml, but committed
+#                                     and checked in CI — see bundled.test.ts
+#   pnpm-lock.yaml                    the build is only reproducible with it
+#   patches/                          the node-pty glibc patch pnpm applies on install
+#   bench/RESULTS.md                  a measured result, not an artifact
+#   .github/                          the release matrix
