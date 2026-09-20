@@ -491,19 +491,26 @@ export interface GitStatusResult {
   readonly hasUpstream: boolean
 }
 
-export interface GitStatusParams {
-  /** Any path inside the repository; the root is resolved from it. */
-  readonly cwd: string
+/**
+ * Where to look.
+ *
+ * `paneId` is the one to send: the daemon reads that pane's shell's *live* directory,
+ * which is the only thing that reflects a `cd`. `cwd` is the escape hatch for a caller
+ * with no pane, and is used as given.
+ */
+export interface GitTargetParams {
+  readonly paneId?: string
+  readonly cwd?: string
 }
 
-export interface GitPathsParams {
-  readonly cwd: string
+export type GitStatusParams = GitTargetParams
+
+export interface GitPathsParams extends GitTargetParams {
   /** Repo-relative paths. Empty means every changed path, except for `git.discard`. */
   readonly paths?: readonly string[]
 }
 
-export interface GitCommitParams {
-  readonly cwd: string
+export interface GitCommitParams extends GitTargetParams {
   readonly message: string
 }
 

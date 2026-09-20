@@ -109,6 +109,10 @@ export class DaemonServer {
   private readonly worktreeService = new WorktreeService()
   /** Working-tree git: status, staging, commits. Stateless for the same reason. */
   private readonly gitService = new GitService()
+
+  private gitContext(): gitRpc.GitContext {
+    return { git: this.gitService, paneCwdInput: (paneId) => this.runtime.paneCwdInput(paneId) }
+  }
   /** The session model: workspaces, tabs, panes. See runtime.ts. */
   readonly runtime: SessionRuntime
   private config: LoadedConfig
@@ -518,15 +522,15 @@ export class DaemonServer {
 
       // --- worktrees and integrations (PHASE-5 Part B) ----------------------
       case 'git.status':
-        return gitRpc.gitStatus({ git: this.gitService }, params)
+        return gitRpc.gitStatus(this.gitContext(), params)
       case 'git.stage':
-        return gitRpc.gitStage({ git: this.gitService }, params)
+        return gitRpc.gitStage(this.gitContext(), params)
       case 'git.unstage':
-        return gitRpc.gitUnstage({ git: this.gitService }, params)
+        return gitRpc.gitUnstage(this.gitContext(), params)
       case 'git.discard':
-        return gitRpc.gitDiscard({ git: this.gitService }, params)
+        return gitRpc.gitDiscard(this.gitContext(), params)
       case 'git.commit':
-        return gitRpc.gitCommit({ git: this.gitService }, params)
+        return gitRpc.gitCommit(this.gitContext(), params)
       case 'worktree.list':
         return worktrees.worktreeList(this.worktreeContext(), params)
       case 'worktree.create':

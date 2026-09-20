@@ -39,6 +39,21 @@ function makeRepo(): string {
   return root
 }
 
+/**
+ * The panel's own column, joined into one string.
+ *
+ * The panel wraps long text, so a message can be split across lines and no contiguous
+ * substring of it appears on the screen. Reading its column back as one run is how a
+ * test asserts on what a person would read.
+ */
+function panelText(screen: string, width = 34): string {
+  return screen
+    .split('\n')
+    .map((line) => line.slice(0, width).trimEnd())
+    .join(' ')
+    .replace(/\s+/gu, ' ')
+}
+
 /** Start a client whose first pane sits in `cwd`, with the panel open. */
 async function openPanel(cwd: string): Promise<TuiHarness> {
   harness = await TuiHarness.start({
@@ -173,10 +188,36 @@ describe('the source control panel', () => {
     await tui.waitForText('back-to-shell')
   })
 
+  it('follows the shell into a repository it cd-ed to after starting', async () => {
+    // The bug this covers: `pane.cwd` is the spawn directory and a `cd` does not touch
+    // it, so a pane started at `/` reported "/ is not inside a git repository" however
+    // far into a checkout the shell had moved.
+    const root = makeRepo()
+    writeFileSync(join(root, 'tracked.txt'), 'edited\n')
+
+    harness = await TuiHarness.start({
+      cols: 110,
+      rows: 30,
+      command: '/bin/bash',
+      args: ['--norc', '--noprofile'],
+      cwd: '/'
+    })
+    await harness.waitForReady()
+    harness.write(`cd ${root}\r`)
+    await harness.waitForText('$ ')
+
+    harness.command('g')
+    await harness.waitForText('Changes (1)')
+    expect(await harness.screen()).toContain('tracked.txt')
+  })
+
   it('reports a directory that is not a repository', async () => {
     const plain = mkdtempSync(join(tmpdir(), 'lc-plain-'))
     repos.push(plain)
     const tui = await openPanel(plain)
-    await tui.waitForText('not inside a git repository')
+    await tui.waitForScreen(
+      (screen) => panelText(screen).includes('is not inside a git repository'),
+      'the panel never reported a missing repository'
+    )
   })
 })

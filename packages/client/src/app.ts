@@ -1111,7 +1111,7 @@ export class TuiApp {
     // is made here and not before the dialog opens: an escape must leave no trace.
     if (outcome.kind === 'cancelled') return
     if (prompt.kind === 'commit') {
-      await this.callScm('git.commit', { cwd: prompt.id, message: outcome.value })
+      await this.callScm('git.commit', { paneId: prompt.id, message: outcome.value })
       return
     }
     if (prompt.kind === 'new-tab') {
@@ -1404,28 +1404,31 @@ export class TuiApp {
   // -------------------------------------------------------------------------
 
   /**
-   * The repository the panel is looking at: the focused pane's working directory.
+   * The pane the panel is looking at: the focused one.
+   *
+   * Its *id*, not its cwd. `pane.cwd` is where the pane was spawned, and a shell that
+   * has `cd`-ed since leaves it untouched — so sending it asked about the wrong
+   * repository, or about `/`. The daemon resolves the id to the shell's live directory.
    *
    * Following the focused pane rather than remembering a folder is what makes the panel
    * useful with a fleet of agents, each in its own worktree — switching pane switches
    * repository, with nothing to configure.
    */
-  private scmCwd(): string | null {
-    const pane = paneById(this.state, this.state.focusedPaneId)
-    return pane === null || pane.cwd.length === 0 ? null : pane.cwd
+  private scmPaneId(): string | null {
+    return this.state.focusedPaneId
   }
 
   /** Re-read the status. Every mutation returns one, so this is only for open and `r`. */
   private async refreshScm(): Promise<void> {
     const panel = this.scm
     if (panel === null) return
-    const cwd = this.scmCwd()
-    if (cwd === null) {
-      panel.fail('no working directory')
+    const paneId = this.scmPaneId()
+    if (paneId === null) {
+      panel.fail('no focused pane')
       this.requestRender()
       return
     }
-    await this.callScm('git.status', { cwd })
+    await this.callScm('git.status', { paneId })
   }
 
   /**
@@ -1456,7 +1459,7 @@ export class TuiApp {
   private async applyScmOutcome(outcome: ScmOutcome): Promise<void> {
     const panel = this.scm
     if (panel === null) return
-    const cwd = this.scmCwd()
+    const paneId = this.scmPaneId()
     switch (outcome.kind) {
       case 'none':
         this.requestRender()
@@ -1470,15 +1473,15 @@ export class TuiApp {
         await this.refreshScm()
         return
       case 'stage':
-        if (cwd === null) return
-        await this.callScm('git.stage', { cwd, paths: [...outcome.paths] })
+        if (paneId === null) return
+        await this.callScm('git.stage', { paneId, paths: [...outcome.paths] })
         return
       case 'unstage':
-        if (cwd === null) return
-        await this.callScm('git.unstage', { cwd, paths: [...outcome.paths] })
+        if (paneId === null) return
+        await this.callScm('git.unstage', { paneId, paths: [...outcome.paths] })
         return
       case 'discard': {
-        if (cwd === null) return
+        if (paneId === null) return
         const [path] = outcome.paths
         if (path === undefined) return
         // The wording distinguishes the two outcomes, because only one of them is
@@ -1487,25 +1490,25 @@ export class TuiApp {
           outcome.untracked > 0 ? 'Delete this file?' : 'Discard changes?',
           outcome.untracked > 0 ? `${path} is untracked and will be deleted` : `${path} will be restored from the index`,
           async () => {
-            await this.callScm('git.discard', { cwd, paths: [path] })
+            await this.callScm('git.discard', { paneId, paths: [path] })
           }
         )
         this.requestRender()
         return
       }
       case 'commit': {
-        if (cwd === null) return
+        if (paneId === null) return
         if (panel.status === null || panel.status.staged.length === 0) {
           panel.fail('nothing staged to commit')
           this.requestRender()
           return
         }
-        this.prompt = { dialog: new PromptDialog('commit message', ''), kind: 'commit', id: cwd }
+        this.prompt = { dialog: new PromptDialog('commit message', ''), kind: 'commit', id: paneId }
         this.requestRender()
         return
       }
       case 'diff': {
-        if (cwd === null) return
+        if (paneId === null) return
         // Opened in a pane rather than rendered here: `git diff` is already a pager the
         // user has configured — delta, less, whatever — and reimplementing that badly
         // in a 34-column panel would help nobody.
@@ -1517,7 +1520,8 @@ export class TuiApp {
           focus: true,
           command: 'git',
           args,
-          cwd: panel.status?.root ?? cwd
+          // The repository root the panel is showing, which is already resolved.
+          cwd: panel.status?.root ?? ''
         })
         return
       }

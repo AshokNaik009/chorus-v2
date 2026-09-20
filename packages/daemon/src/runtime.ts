@@ -317,6 +317,19 @@ export class SessionRuntime {
     return true
   }
 
+  /**
+   * The pane's shell pid and its recorded cwd, or null when it has no live session.
+   *
+   * Both, because the live lookup can fail — a process that just exited — and the
+   * recorded directory is the right thing to fall back to.
+   */
+  paneCwdInput(paneId: string): { shellPid: number | null; recorded: string } | null {
+    const pane = this.state.panes.get(paneId)
+    if (!pane) return null
+    const session = pane.sessionId === null ? null : this.sessions.get(pane.sessionId)
+    return { shellPid: session?.pid ?? null, recorded: pane.cwd }
+  }
+
   /** What the detector needs to know about one pane, or null if it has no session. */
   detectionInputFor(paneId: string): PaneDetectionInput | null {
     const pane = this.state.panes.get(paneId)

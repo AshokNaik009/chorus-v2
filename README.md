@@ -124,6 +124,11 @@ If clicks do nothing, the terminal is not forwarding them: macOS Terminal.app ne
 repository of whatever pane has focus — so with a fleet of agents in separate
 worktrees, switching pane switches repository with nothing to configure.
 
+It follows the shell's *current* directory, not the one the pane started in, so a
+pane you have `cd`-ed into a checkout shows that checkout. The daemon reads the live
+directory from the process each time it is asked, because `cd` announces itself to
+nobody.
+
 | Key | Action |
 |---|---|
 | `↑↓` / `j k` | move |
