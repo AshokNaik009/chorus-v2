@@ -561,6 +561,199 @@ export interface GitSyncResult {
   readonly message: string
 }
 
+/**
+ * One repository's headline, for a sidebar row.
+ *
+ * The sidebar lists workspaces, and a workspace is a directory; the two facts a person
+ * scanning that list wants are which branch it is on and whether it is behind. That is
+ * `git status -sb`'s header and nothing else, which is why this is its own small
+ * result rather than a `GitStatusResult` per workspace — a status carries every
+ * changed path, and the sidebar draws one line.
+ */
+export interface GitRepoSummary {
+  /** The directory that was asked about, echoed back so the caller can match it up. */
+  readonly path: string
+  /** False when the directory is not inside a checkout; every other field is then empty. */
+  readonly isRepo: boolean
+  readonly branch: string
+  readonly ahead: number
+  readonly behind: number
+  readonly hasUpstream: boolean
+  /** Anything tracked is modified or staged. Untracked files do not count. */
+  readonly dirty: boolean
+}
+
+export interface GitSummaryParams {
+  /** Absolute directories. One `git` invocation each; the caller keeps the list short. */
+  readonly paths: readonly string[]
+}
+
+export interface GitSummaryResult {
+  readonly summaries: readonly GitRepoSummary[]
+}
+
+// ---------------------------------------------------------------------------
+// The Source Control drawers (PHASE-11)
+// ---------------------------------------------------------------------------
+
+/**
+ * The eight read-mostly lists under the changes list.
+ *
+ * herdr-sidebar's `Drawer` enum, name for name. Each one is a single `git` command's
+ * output, fetched when the drawer is opened and never on a status refresh.
+ */
+export type GitDrawerId =
+  | 'graph'
+  | 'commits'
+  | 'fileHistory'
+  | 'branches'
+  | 'worktrees'
+  | 'remotes'
+  | 'stashes'
+  | 'tags'
+
+/**
+ * A commit, from `graph`, `commits` or `fileHistory`.
+ *
+ * `rail` is the `--graph` art that preceded it on the line — `* `, `| * ` — and is
+ * empty for the drawers that do not draw one. It is carried rather than re-derived
+ * because git is the only thing that knows where the rails go, and drawing our own DAG
+ * is a project rather than a row.
+ */
+export interface GitCommitRow {
+  readonly kind: 'commit'
+  /** The full hash. Every commit action takes this, never an abbreviation. */
+  readonly hash: string
+  /** What is shown: git's own `--abbrev-commit` length. */
+  readonly short: string
+  readonly subject: string
+  /** `%D` split up: branch and tag names pointing here, `HEAD` included. */
+  readonly refs: readonly string[]
+  /** `%ad` under `--date=short`, so `2026-09-21`. Empty when git printed none. */
+  readonly date: string
+  readonly rail: string
+}
+
+/**
+ * A `--graph` line with no commit on it: `|\`, `|/`, `| |`.
+ *
+ * Its own row type rather than a commit with an empty hash, so nothing downstream can
+ * offer a context menu for a piece of ASCII art.
+ */
+export interface GitRailRow {
+  readonly kind: 'rail'
+  readonly rail: string
+}
+
+export interface GitBranchRow {
+  readonly kind: 'branch'
+  readonly name: string
+  readonly current: boolean
+  readonly remote: boolean
+}
+
+/**
+ * A worktree, with the parts a 34-column dock can show.
+ *
+ * `name` is the folder's own name, which is what `pretty_worktree_line` exists for
+ * upstream: an absolute path "clipped uselessly in a narrow pane". The full `path`
+ * travels too, because that is what `worktree.remove` and `Copy Path` need.
+ */
+export interface GitWorktreeRow {
+  readonly kind: 'worktree'
+  readonly path: string
+  readonly name: string
+  readonly branch: string | null
+  readonly head: string | null
+  readonly primary: boolean
+}
+
+export interface GitRemoteRow {
+  readonly kind: 'remote'
+  readonly name: string
+  /** The fetch URL. `git remote -v`'s push line is dropped; it is the same URL. */
+  readonly url: string
+}
+
+export interface GitStashRow {
+  readonly kind: 'stash'
+  /** Position in `git stash list`, which is the `N` in `stash@{N}`. */
+  readonly index: number
+  /** `%gd`, as git spelled it: `stash@{0}`. Every stash action takes this. */
+  readonly ref: string
+  readonly hash: string
+  /** `%gs`: `WIP on main: 1e7f2c9 merge feat`. */
+  readonly subject: string
+}
+
+export interface GitTagRow {
+  readonly kind: 'tag'
+  readonly name: string
+}
+
+export type GitDrawerRow =
+  | GitCommitRow
+  | GitRailRow
+  | GitBranchRow
+  | GitWorktreeRow
+  | GitRemoteRow
+  | GitStashRow
+  | GitTagRow
+
+export interface GitDrawerParams extends GitTargetParams {
+  readonly drawer: GitDrawerId
+  /** Repo-relative, and required by `fileHistory` alone. */
+  readonly path?: string
+  /** Rows at most. Defaults to `DRAWER_LIMIT`, which is herdr-sidebar's 30. */
+  readonly limit?: number
+}
+
+/**
+ * What a drawer holds.
+ *
+ * `note` is how a drawer says something other than "here are rows": no commits yet, no
+ * file selected. An empty list with no note is an empty drawer, which is the normal
+ * state of Stashes and Tags and must not read as a failure.
+ */
+export interface GitDrawerResult {
+  readonly drawer: GitDrawerId
+  readonly rows: readonly GitDrawerRow[]
+  readonly note: string | null
+}
+
+/**
+ * A drawer row's menu entry that reaches git.
+ *
+ * Only the ones with no home already: `Checkout Branch` is `git.checkout`, removing a
+ * worktree is `worktree.remove`, and every `Show Changes` is a pager pane the client
+ * opens. Adding those here would be a second way to do each.
+ */
+export type GitDrawerActionId =
+  | 'commit.checkout'
+  | 'commit.cherryPick'
+  | 'commit.revert'
+  | 'commit.reset'
+  | 'branch.merge'
+  | 'branch.delete'
+  | 'stash.apply'
+  | 'stash.pop'
+  | 'stash.drop'
+  | 'remote.fetch'
+  | 'tag.checkout'
+  | 'tag.delete'
+
+export interface GitDrawerActionParams extends GitTargetParams {
+  readonly action: GitDrawerActionId
+  /** A hash, a branch name, `stash@{N}`, a remote name or a tag — per action. */
+  readonly ref: string
+}
+
+/** git's own last line, and the status the action left behind. */
+export interface GitDrawerActionResult {
+  readonly message: string
+  readonly status: GitStatusResult
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem (the explorer)
 // ---------------------------------------------------------------------------

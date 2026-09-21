@@ -151,7 +151,7 @@ describe('unified versus separate', () => {
     // The changes list's hints replace the tree's once it has the keyboard. Matched on
     // the *start* of the hint: at 80 columns the status bar truncates, so anything later
     // in the line is not on screen to assert against.
-    await tui.waitForText('stage/unstage')
+    await tui.waitForText('stage/open')
     tui.write('\t')
     // And back, so Tab is a toggle rather than a one-way trip into the lower list.
     await tui.waitForText('h/l fold')

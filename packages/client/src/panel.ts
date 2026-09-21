@@ -135,6 +135,25 @@ export function panelSettings(config: { sidebar: SidebarConfig }): PanelSettings
 /** Which half of a `unified` body has the keyboard. */
 export type UnifiedFocus = 'tree' | 'changes'
 
+/**
+ * How wide a file wants to be read at.
+ *
+ * Eighty columns, because that is what text is written to. The dock's other three
+ * views are lists of paths and are fine in thirty-four; the Preview is the one view
+ * whose content was authored at a width, and drawing it in a list's column turns every
+ * line into an ellipsis. That was the state this fixed: a file open in the dock beside
+ * two idle shells, unreadable, with three quarters of the screen empty.
+ */
+const READABLE_WIDTH = 80
+
+/**
+ * The narrowest preview that is still worth putting the tree beside.
+ *
+ * Below this the split costs more than it gives — a tree you were not reading against
+ * a file you now cannot. So the tree comes back only when it is effectively free.
+ */
+const TREE_BESIDE_PREVIEW_MIN = 72
+
 export class SidebarPanels {
   readonly explorer = new ExplorerPanel()
   readonly scm = new ScmPanel()
@@ -201,6 +220,56 @@ export class SidebarPanels {
   }
 
   /**
+   * How wide the dock should be, for the view that is showing.
+   *
+   * Three of the four views are lists and take the configured width, capped at a third
+   * of the screen so docking can never collapse the panes. **The Preview is not a
+   * list**, and capping it the same way is what made it useless: herdr-sidebar is a
+   * narrow tree *plus a wide viewer*, and porting the viewer into the tree's column
+   * kept the geometry and lost the point of it.
+   *
+   * So Preview asks for enough to read at — the tree's width plus eighty columns when
+   * the screen is large enough to hold the pair, eighty when it is not — and is capped
+   * at **half** the screen rather than a third, because a multiplexer whose panes are
+   * a third of the screen is a file viewer with a terminal attached. It never returns
+   * less than the other views would, so switching to it never makes the dock narrower.
+   */
+  preferredWidth(cols: number, configured: number): number {
+    const normal = Math.min(Math.max(configured, this.minWidth()), Math.max(this.minWidth(), Math.floor(cols / 3)))
+    if (this.view !== 'preview') return normal
+    const ideal = MIN_SCM_WIDTH + 1 + READABLE_WIDTH
+    return Math.max(normal, Math.min(Math.floor(cols / 2), ideal))
+  }
+
+  /**
+   * How a Preview body divides: the tree on the left when there is room, the file on
+   * the right, and the whole body for the file when there is not.
+   *
+   * This is the shape `PARITY.md` has carried as its largest remaining orphan — "a
+   * narrow tree *plus* a wide viewer" — and it is worth having because of what it does
+   * to the mouse: clicking a row in that tree previews it beside itself, which is the
+   * gesture the Explorer's click already produced and had nowhere to put.
+   */
+  previewAreas(body: Rect): { tree: Rect | null; preview: Rect } {
+    if (body.width < MIN_SCM_WIDTH + 1 + TREE_BESIDE_PREVIEW_MIN) return { tree: null, preview: body }
+    const treeWidth = MIN_SCM_WIDTH
+    return {
+      tree: { x: body.x, y: body.y, width: treeWidth, height: body.height },
+      preview: {
+        x: body.x + treeWidth + 1,
+        y: body.y,
+        width: body.width - treeWidth - 1,
+        height: body.height
+      }
+    }
+  }
+
+  /** The columns the file itself gets — what the daemon should wrap and render to. */
+  previewWidth(area: Rect): number {
+    return this.previewAreas(this.bodyArea(area)).preview.width
+  }
+
+  /**
    * One row at the bottom when `[sidebar] git-footer` is on and there is a branch.
    *
    * Conditional on there *being* a status, not just on the setting: an empty footer
@@ -232,7 +301,11 @@ export class SidebarPanels {
   unifiedAreas(body: Rect): { tree: Rect; changes: Rect } {
     const changeRows = (this.scm.status?.staged.length ?? 0) + (this.scm.status?.unstaged.length ?? 0)
     const headers = changeRows === 0 ? 0 : 2
-    const wanted = Math.min(2 + headers + changeRows, Math.floor(body.height / 2))
+    // An *open* drawer asks for room; eight collapsed ones do not. Counting the eight
+    // headers unconditionally would take half the tree away from everybody who has
+    // never opened a drawer, and they are still reachable by scrolling the lower half.
+    const drawerRows = this.scm.drawers.expandedIds().length === 0 ? 0 : this.scm.drawers.lines().length
+    const wanted = Math.min(2 + headers + changeRows + drawerRows, Math.floor(body.height / 2))
     const changesHeight = Math.max(3, Math.min(wanted, Math.max(0, body.height - 4)))
     const treeHeight = Math.max(0, body.height - changesHeight)
     return {
@@ -428,8 +501,12 @@ export class SidebarPanels {
       case 'search':
         this.search.clickRow(row, body)
         return NOTHING
-      case 'preview':
-        return NOTHING
+      case 'preview': {
+        // A click in the tree half previews what it hits, right beside itself.
+        const { tree } = this.previewAreas(body)
+        if (tree === null || column >= tree.x + tree.width) return NOTHING
+        return { view: 'explorer', outcome: this.explorer.clickRow(row, tree) }
+      }
     }
   }
 
@@ -464,7 +541,9 @@ export class SidebarPanels {
     }
 
     const body = this.bodyArea(area)
-    this.lastBody = body
+    // The preview pages and wraps against its *own* rectangle, which is not the body
+    // once the tree is beside it.
+    this.lastBody = this.view === 'preview' ? this.previewAreas(body).preview : body
     if (this.footerRows() > 0) this.renderFooter(buffer, area, palette)
     if (body.height <= 0) return
     switch (this.view) {
@@ -484,9 +563,12 @@ export class SidebarPanels {
       case 'search':
         this.search.renderInto(buffer, body, palette, focused)
         return
-      case 'preview':
-        this.preview.renderInto(buffer, body, palette, focused)
+      case 'preview': {
+        const { tree, preview } = this.previewAreas(body)
+        if (tree !== null) this.explorer.renderInto(buffer, tree, palette)
+        this.preview.renderInto(buffer, preview, palette, focused)
         return
+      }
     }
   }
 

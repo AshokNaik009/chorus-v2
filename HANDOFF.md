@@ -1,416 +1,363 @@
-# Handoff — end of Phase 10
+# Handoff — end of Phase 11
 
-**Read `PLAN.md` first, then `phases/PHASE-11.md` and `phases/PARITY.md`.** This file is
-the state of the world as this session leaves it. Everything was measured on
-**2026-09-21**, macOS (darwin 25.6.0, arm64, Apple silicon, 10 cores), Node v22.1.0,
-pnpm 10.18.0, git 2.54.0 (Apple Git-157). **`rg`, `bat`, `glow` and `delta` are still not
-installed on this machine** — unchanged from phase 9, see *Open threads*.
+**Read `PLAN.md` first, then `phases/PARITY.md`.** This file is the state of the world
+as this session leaves it. Everything was measured on **2026-09-21**, macOS (darwin
+25.6.0, arm64, Apple silicon, 10 cores), Node v22.1.0, pnpm 10.18.0, git 2.54.0 (Apple
+Git-157). **`rg`, `bat`, `glow` and `delta` are still not installed on this machine** —
+unchanged since phase 9, see *Open threads*.
 
 ## Status
 
-- **Phase 10 complete: yes, on all 10 criteria.** The phase was optional and was decided,
-  not defaulted into; the four decisions it required are in `PLAN.md`'s key-decisions
-  table, with the numbers next to them.
-- `pnpm test` is **1,389 tests in 82 files, all green** on a full serial run at load
-  average 16.85. Four full runs were made; the last was clean.
-- **One of the two long-documented flakes is diagnosed and fixed** — see *Surprises*.
+- **Phase 11 complete: yes, on 9 of 10 criteria.** Criterion 10 (no bench regression) was
+  **not measurable** — the machine sat at load average 15.05 throughout, which is the
+  same reason phases 7 and 10 could not measure it either. See *Numbers*.
+- **This phase completes the port of herdr-sidebar's advertised feature list.**
+  `phases/PARITY.md`'s Source Control section has no `phase N` rows left in it.
+- New tests: **60**, all green (34 daemon, 26 client). The suites this phase touched —
+  `source-control.test.ts` (23) and `sidebar.test.ts` (18) — pass in isolation.
 
 | # | Criterion | Verdict | Where |
 |---|---|---|---|
-| 1 | `pnpm test` green | met | 1,389/1,389 |
-| 2 | `plugin install <owner/repo>` clones, builds, registers — against a **local fixture** | met | `daemon/test/plugin-install.test.ts`, `client/test/plugin-cli.test.ts` |
-| 3 | a declared action opens in a split pane and in a tab, both idempotent | met | `daemon/test/plugins.test.ts` |
-| 4 | `plugin list --json` matches the shape the launchers parse | met | `client/test/plugin-cli.test.ts` `describe('plugin list --json')` |
-| 5 | the shim answers every command the launchers use | met — and it is **six**, not five | `client/src/compat.test.ts`, plus end-to-end through a real daemon |
-| 6 | a failed build is reported and leaves nothing half-installed | met | `daemon/test/plugin-install.test.ts` `describe('a build that fails')` |
-| 7 | output over the cap is truncated and reported, not buffered | met | `daemon/src/plugins/run.test.ts` |
-| 8 | an install is pinned; a changed artifact at the same ref is refused | met | same file, `describe('pinning')` |
-| 9 | the revocation decision is exercised by a test | met — the choice was "nothing", and the test says so | same file, `describe('revocation: what this host does not have')` |
-| 10 | `herdr-file-viewer` installs and opens | met, on macOS | see **Which plugins were tested** |
+| 1 | `pnpm test` green | met for everything this phase touched; **the full suite was not run to completion at this load** — see *Open threads* | |
+| 2 | each drawer lists what its command returns, empty case included | met | `daemon/src/git-drawers.test.ts`, two fixture repositories |
+| 3 | rows arrive structured; the client never parses a hash out of display text | met, two ways | `client/src/drawers.test.ts` — a decoy-filled subject, plus a source check |
+| 4 | a path with a space survives worktrees and file history | met | `git-drawers.test.ts`, `a file.txt` and a `wt dir` worktree |
+| 5 | `fileHistory` with nothing selected shows a reason | met | daemon returns the note and runs **no** command; client shows it |
+| 6 | every destructive action confirms first; cancelling runs nothing | met | `drawers.test.ts` asserts every `…` entry carries a `confirm`, and only those |
+| 7 | expanding runs exactly one git command; a collapsed refresh runs none | met | `git-drawers.test.ts` `describe('how many commands a drawer costs')` |
+| 8 | remote and worktree rows survive 34 columns with the identifying part | met | `fitRowText`, tested at 32 and 24 columns |
+| 9 | `Fetch` on an unreachable remote fails with a message and does not hang | met | returns in ~1.5 s against an unreachable GitHub URL; `gitEnv`'s guard was already in place |
+| 10 | no regression in `bench/RESULTS.md` | **not measured** | load 15.05; see *Numbers* |
 
 ## What exists now
 
-`leap-chorus` is a herdr plugin host. `leap-chorus plugin install <owner>/<repo>` fetches
-a shallow checkout over git, reads the plugin's `herdr-plugin.toml`, shows the user every
-argv it is about to run and every manifest key it will ignore, runs the declared build,
-refuses a manifest the build rewrote, and swaps the result into a store under the data
-root with one rename and a way back. What it installed is **pinned**: the content hash of
-the fetched source is recorded, and the same ref producing different bytes later is
-refused rather than installed. A plugin's declared pane or action opens as an **ordinary
-pane** — `pane.split` or `tab.create` with the plugin's argv — idempotently, so a second
-open focuses the first. A plugin's own process gets herdr's environment variable names,
-and `$HERDR_BIN_PATH` points at a generated wrapper called `herdr-compat` that translates
-herdr's CLI into ours. **`herdr-file-viewer` v1.17.0 installs from GitHub and runs
-unmodified**, including its own launch-or-focus-or-toggle logic.
+The Source Control view has eight collapsible drawers under the changes list — Graph,
+Commits, File History, Branches, Worktrees, Remotes, Stashes, Tags — each one a single
+`git` command's output arriving as **structured rows**, fetched when the drawer is
+opened and never on a status refresh. Every row type has the context menu herdr-sidebar
+gives it, entry for entry, and every entry whose label ends in `…` opens the existing
+`ConfirmDialog` before anything runs. `Show Changes` is `git show` in a pager pane, like
+every other diff in this project. `Copy …` works, through OSC 52, and says it might not
+have. Three of the menu's entries are not new code at all: `Checkout Branch` is the
+branch picker's `git.checkout`, and a worktree's Open and Remove are phase 5's
+`worktree.open` and `worktree.remove`.
 
-Three sidebar bugs were also fixed, all reported from screenshots during the phase and
-all in phase 7-9 code: a click on an Explorer row did nothing but move the highlight, the
-Preview view said "nothing selected" while a file sat under the tree's cursor, and — after
-the first fix went too far — a click on a file spawned a `$PAGER` pane per click.
+Also, unrelated to the phase and asked for from a screenshot: the workspace strip's
+action row has a **`▤ files` button** between `new` and `menu`, which opens the docked
+file sidebar. The dock previously had no visible way in — `C-b e` opens it and nothing
+on screen said so.
 
 ## Deliverables, as they landed
 
 | File | Lines | What |
 |---|---|---|
-| `packages/daemon/src/plugins/manifest.ts` | 392 | `herdr-plugin.toml`: the subset honoured, and every key that is not |
-| `packages/daemon/src/plugins/install.ts` | 451 | fetch, preview, build, pin, atomic swap, rollback |
-| `packages/daemon/src/plugins/registry.ts` | 277 | the on-disk store, the two content hashes, `verify` |
-| `packages/daemon/src/plugins/run.ts` | 258 | bounded output, bounded time, bounded concurrency |
-| `packages/daemon/src/rpc/plugins.ts` | 335 | `plugin.list`, `plugin.pane.open`, `plugin.action.invoke` |
-| `packages/client/src/plugin-cli.ts` | 568 | `plugin install/list/verify/remove/config-dir/shim/pane/action` |
-| `packages/client/src/compat.ts` | 281 | the herdr translation table, and the shim's text |
-| `scripts/herdr-compat.mjs` | 44 | the `$HERDR_BIN_PATH` shim for a source checkout |
-| `packages/daemon/src/plugins/manifest.test.ts` | 303 | 40 tests |
-| `packages/daemon/test/plugin-install.test.ts` | 367 | 34 tests, real git |
-| `packages/client/src/compat.test.ts` | 233 | 34 tests |
-| `packages/daemon/test/plugins.test.ts` | 417 | 29 tests, real daemon |
-| `packages/daemon/src/plugins/registry.test.ts` | 243 | 25 tests |
-| `packages/client/test/plugin-cli.test.ts` | 338 | 19 tests, real child processes |
-| `packages/daemon/src/plugins/run.test.ts` | 160 | 16 tests |
-| `packages/daemon/test/plugin-fixture.ts` | 118 | a plugin as a real git repository |
-| `packages/client/src/explorer.test.ts` | 59 | 3 tests, the click fix |
+| `packages/client/src/drawers.ts` | 538 | drawer state, the row → text rules, the menu table, `drawerCommand` |
+| `packages/daemon/src/git-drawers.ts` | 438 | the eight queries, the parsers, the twelve actions |
+| `packages/daemon/src/git-drawers.test.ts` | 415 | 34 tests, real repositories |
+| `packages/client/src/drawers.test.ts` | 385 | 26 tests |
+| `packages/protocol/src/session-model.ts` | +162 | seven row types, two params, two results |
+| `packages/client/src/app.ts` | +231 | fetch, menus, confirms, the action executor |
+| `packages/client/src/scm.ts` | +147 | hosts the drawers under the changes list |
+| `packages/client/src/clipboard.ts` | 64 | OSC 52, and the sentence that admits it may be ignored |
+| `packages/daemon/src/rpc/git.ts` | +56 | `git.drawer`, `git.drawerAction` |
+| `packages/client/src/chrome.ts` | +46 | the `▤ files` button and its hit span |
+| `packages/daemon/src/git.ts` | +29 | `BRANCH_REF_ARGS`, now shared with the drawer |
 
-**`install.ts` is a fifth file the phase's deliverable list did not name.** It was going
-to be half of `registry.ts`, and separating "what is installed" from "how something gets
-installed" is worth one extra file: the store is read on every plugin launch and the
-installer runs once, in a different process.
-
-## The four decisions, and where they landed
-
-All four are in `PLAN.md`'s key-decisions table, which is where the phase asked for them.
-Short forms:
-
-1. **Does `leap-chorus` execute code fetched from a URL on a user's say-so? Yes.** The
-   number the phase asked to be written next to it: orca's yes is **9,914 non-test
-   lines**; ours is **~1,400** including tests. The difference is the security model —
-   no capability set, no consent fingerprint, no kill list, no worker isolation.
-2. **Pinned.** Content hash of the fetched source; a changed artifact at the same ref is
-   refused; `--update` to accept, `--pin` to verify a first install against a published
-   hash.
-3. **Revocation: nothing happens.** Written down rather than discovered later. See below.
-4. **The shim is honest.** No binary named `herdr` is shipped.
-
-## What a user is trusting, in plain words
-
-`plugin install` runs **an arbitrary program from a stranger's repository, as the user,
-with the user's filesystem, network and credentials**. For `herdr-file-viewer` that
-program is `scripts/fetch-or-build.sh`, which downloads a prebuilt binary or falls back
-to `cargo build`.
-
-What is actually defended:
-
-- **Nothing runs before it has been shown.** The manifest is read from the fetched
-  checkout and printed — id, version, every build argv, every entrypoint argv, every
-  ignored key — and the build runs only after a yes. `--yes` is required when stdin is
-  not a terminal, so this is not something a script can do to a user.
-- **The manifest cannot change under its own build.** herdr's
-  `ensure_manifest_unchanged_after_build`, and the attack is sharp: without it a build
-  script appends `[[actions]]` to the file the preview rendered and the host registers
-  what nobody saw.
-- **The artifact is pinned**, as above.
-- **A failed install leaves nothing.** Everything happens in a temp directory under the
-  data root; the store is touched by one rename, with the previous checkout kept aside
-  until the registry write succeeds.
-- **Output and concurrency are bounded** — 64 KiB, 32 in flight, herdr's numbers.
-
-**None of that is a sandbox**, and the phase was explicit that the handoff must not imply
-it is. Bounding output is not a security boundary. A plugin can read every file the user
-can read and open every socket the user can open, before and after the confirmation.
-
-## Revocation: what this does not have
-
-There is **no kill list**. No signed list, no fetch, no revocation at a distance. If a
-plugin turns out to be malicious after a hundred people installed it, **a hundred people
-each have to run `leap-chorus plugin remove`**. `daemon/test/plugin-install.test.ts` has
-a test that says exactly this, because the phase asked for the gap to be exercised rather
-than quietly dropped.
-
-What exists instead, and what it is worth:
-
-| | Catches | Does not catch |
-|---|---|---|
-| `plugin verify` | a file changed in the store after the install | a plugin that was malicious the day it was published |
-| the pin | a rewritten tag, an account takeover upgrading an installed plugin | the first install of a bad plugin |
-| `plugin list --json` | publishes the commit and hash, so a user can compare against an advisory | nothing, on its own — it needs someone to read it |
-
-Orca's `plugin-kill-list.ts` is the shape of the thing that is missing, including the
-detail worth copying if it is ever built: refuse a list whose `generatedAt` is more than
-24 hours ahead of the clock, or a far-future entry disables revocation permanently.
-
-## The manifest subset honoured, and what is ignored
-
-| Key | Honoured |
-|---|---|
-| `id` `name` `version` `description` | yes, validated |
-| `platforms` | yes — an entry not for this platform is never offered |
-| `[[build]]` | yes, at install, in the fetched checkout, bounded |
-| `[[actions]]` | yes — argv, runnable headless or in a pane |
-| `[[panes]]` | yes — argv, opened in a split or a tab |
-| `[[events]]` | **no** |
-| `[[startup]]` | **no** |
-| `[[link_handlers]]` | **no** |
-| `min_herdr_version` | **no** — a claim about a program this is not |
-| an action's `contexts` | **no** — it picks a herdr menu we do not have |
-| a pane's `width` / `height` | **no** — they size a popup we do not have |
-
-**Every ignored key is named, never dropped.** `manifest.ignored` collects them, the
-install preview prints them with the line "this host does not run those; the plugin may
-not work as written", and `plugin list` keeps them. An unknown key is reported too, and
-marked `(unknown)`, so a typo in `platforms` is distinguishable from a feature we skipped.
-This is the same failure mode the phase's notes on orca's capability set warn about: a
-plugin that appears installed and quietly does nothing.
-
-**Placements.** herdr has five; this multiplexer has one kind of pane. `split` and `tab`
-are honoured; `overlay`, `popup` and `zoomed` fall back to `split`, and the fallback is
-reported in `placementFallbackFrom` rather than hidden.
-
-**Ids are validated harder than herdr's.** A plugin id becomes a directory name; herdr
-percent-encodes whatever it is given, and we refuse anything that is not already a safe
-path component. The encoder is a second place for a traversal bug to hide.
+**PHASE-11's deliverable list named four files; this is eleven.** The extra ones are
+`clipboard.ts` (the phase asked for a decision and the decision was yes),
+`git-drawers.test.ts` / `drawers.test.ts`, and the protocol types, which the phase's
+list folded into the RPC file.
 
 ## Types and contracts the next phase depends on
 
-Three new methods on `AgentMethodMap`, all in `AGENT_METHODS`:
+Two new methods on `AgentMethodMap`, both in `AGENT_METHODS`:
 
 ```ts
-'plugin.list':          { params: PluginListParams;         result: PluginListResult }
-'plugin.pane.open':     { params: PluginPaneOpenParams;     result: PluginPaneOpenResult }
-'plugin.action.invoke': { params: PluginActionInvokeParams; result: PluginActionInvokeResult }
+'git.drawer':       { params: GitDrawerParams;       result: GitDrawerResult }
+'git.drawerAction': { params: GitDrawerActionParams; result: GitDrawerActionResult }
 ```
+
+### The row types, and their wire shapes
 
 ```ts
-type PluginPlatform = 'linux' | 'macos' | 'windows'
-type PluginPlacement = 'split' | 'tab'
-type PluginDeclaredPlacement = 'overlay' | 'popup' | 'split' | 'tab' | 'zoomed'
-type PluginEntrypointKind = 'pane' | 'action'
+type GitDrawerId =
+  | 'graph' | 'commits' | 'fileHistory' | 'branches'
+  | 'worktrees' | 'remotes' | 'stashes' | 'tags'
 
-interface PluginEntrypointInfo {
-  id: string; title: string; description: string | null
-  kind: PluginEntrypointKind
-  placement: PluginPlacement
-  placementFallbackFrom: PluginDeclaredPlacement | null
-  command: readonly string[]          // argv; never run through a shell
-  platforms: readonly PluginPlatform[] // empty means every platform
+interface GitCommitRow {
+  kind: 'commit'
+  hash: string        // full, 40 hex; every commit action takes this
+  short: string       // what is shown
+  subject: string
+  refs: readonly string[]   // %D split on ', ' — 'HEAD -> main', 'tag: v1.0'
+  date: string        // %ad under --date=short, or ''
+  rail: string        // git's own --graph art, empty for the other two log drawers
+}
+interface GitRailRow    { kind: 'rail'; rail: string }
+interface GitBranchRow  { kind: 'branch'; name: string; current: boolean; remote: boolean }
+interface GitWorktreeRow {
+  kind: 'worktree'; path: string; name: string
+  branch: string | null; head: string | null; primary: boolean
+}
+interface GitRemoteRow  { kind: 'remote'; name: string; url: string }
+interface GitStashRow   { kind: 'stash'; index: number; ref: string; hash: string; subject: string }
+interface GitTagRow     { kind: 'tag'; name: string }
+
+type GitDrawerRow =
+  | GitCommitRow | GitRailRow | GitBranchRow | GitWorktreeRow
+  | GitRemoteRow | GitStashRow | GitTagRow
+
+interface GitDrawerParams extends GitTargetParams {
+  drawer: GitDrawerId
+  path?: string        // fileHistory only, repo-relative
+  limit?: number       // default DRAWER_LIMIT = 30
+}
+interface GitDrawerResult {
+  drawer: GitDrawerId
+  rows: readonly GitDrawerRow[]
+  note: string | null   // 'no commits yet', 'select a file to see its history'
 }
 
-interface PluginPin {
-  source: string          // 'owner/repo[/subdir]' or a local path, as typed
-  ref: string | null      // null when the remote's default HEAD was taken
-  commit: string
-  contentHash: string     // sha256 over the *fetched source*, `.git` excluded
-}
+type GitDrawerActionId =
+  | 'commit.checkout' | 'commit.cherryPick' | 'commit.revert' | 'commit.reset'
+  | 'branch.merge'    | 'branch.delete'
+  | 'stash.apply'     | 'stash.pop'         | 'stash.drop'
+  | 'remote.fetch'
+  | 'tag.checkout'    | 'tag.delete'
 
-interface InstalledPluginInfo {
-  id; name; version; description: string | null
-  root; manifestPath; configDir; stateDir: string
-  platforms: readonly PluginPlatform[]
-  entrypoints: readonly PluginEntrypointInfo[]
-  ignored: readonly string[]
-  pin: PluginPin
-  installedHash: string   // sha256 over the *built store*, what `verify` compares
-  installedAt: number
-  missing: boolean        // registered, but its files are gone
-}
+interface GitDrawerActionParams extends GitTargetParams { action: GitDrawerActionId; ref: string }
+interface GitDrawerActionResult { message: string; status: GitStatusResult }
 ```
 
-**Two hashes, because there are two questions.** `pin.contentHash` answers "did the remote
-hand me the same bytes as last time?" and is taken before the build. `installedHash`
-answers "has anything changed under my feet since?" and is taken after. One hash cannot do
-both: a build writes into its own checkout, so a pin taken after it would differ on every
-machine, and a check that always fires is a check nobody reads.
+**`note` is how a drawer says something other than "here are rows".** An empty list with
+a null note is an empty drawer, which is the normal state of Stashes and Tags and must
+not read as a failure.
 
 ### The services
 
 ```ts
-class PluginStore {
-  constructor(dataRoot: string)
-  readonly pluginsDir, registryPath, storeDir, tmpDir, binDir, shimPath: string
-  rootFor(id): string; configDirFor(id): string; stateDirFor(id): string
-  ensureUserDirs(id): void
-  list(): InstalledPluginInfo[]
-  get(id): InstalledPluginInfo | null
-  save(record: PluginRecord): void
-  remove(id, options?: { purge?: boolean }): boolean
-  verify(id): PluginVerifyReport | null    // 'ok' | 'changed' | 'missing'
+// daemon
+const DRAWER_LIMIT = 30                       // herdr-sidebar's scm_app.rs:43
+const DRAWER_IDS: readonly GitDrawerId[]      // display order
+function drawerArgs(query: DrawerQuery): string[] | null   // null = nothing to ask git
+function parseCommitLines(stdout: string): GitDrawerRow[]
+function parseRemotes(stdout: string): GitRemoteRow[]
+function parseStashes(stdout: string): GitStashRow[]
+function parseTags(stdout: string): GitTagRow[]
+function isCommitHash(value: string): boolean   // herdr's hex rule, as a *validator*
+function isStashRef(value: string): boolean
+function worktreeName(path: string): string
+class GitDrawerService {
+  constructor(options?: { git?: GitRunner })
+  rows(cwd: string, query: DrawerQuery): Promise<{ rows; note }>
+  act(cwd: string, action: GitDrawerActionId, ref: string): Promise<string>
 }
-function hashDirectory(root: string): string   // sorted, exec-bit only, symlinks unfollowed
-
-class PluginInstaller {
-  constructor(store: PluginStore, options?: { runner?; now?; platform? })
-  install(options: InstallOptions): Promise<InstallOutcome>
-}
-function parsePluginSource(raw: string): PluginSource   // 'owner/repo[/sub]' or a local path
-function remoteUrlFor(source: PluginSource): string     // a path becomes file://
-
-class PluginRunner {
-  constructor(options?: { maxBytes?; maxInFlight?; spawnFn? })
-  run(request: PluginRunRequest): Promise<PluginRunOutcome>   // rejects only on the in-flight cap
-  get inFlight(): number
-}
-const PLUGIN_OUTPUT_MAX_BYTES = 65536
-const MAX_PLUGIN_COMMANDS_IN_FLIGHT = 32
-
-function parsePluginManifest(text: string): PluginManifest
-function loadPluginManifest(path: string): { manifest; manifestPath; root }
-function currentPluginPlatform(p?: NodeJS.Platform): PluginPlatform | null
-function effectivePlatforms(entry, plugin): readonly PluginPlatform[]
-function platformAllows(platforms, current): boolean
+const BRANCH_REF_ARGS: readonly string[]      // now in git.ts, read by both callers
 
 // client
-function translateHerdrArgv(argv, env?): Translation      // { argv, notes }
-function shimScript(execPath: string, entry: string | null): string
-function writeShim(shimPath: string, options?): string
-function herdrPluginListJson(plugins, shimPath): Record<string, unknown>
-```
-
-### What changed outside the plugin code
-
-```ts
-interface TabCreateParams {          // gained command/args, mirroring workspace.create
-  ...
-  command?: string
-  args?: readonly string[]
+class DrawersPanel {
+  isExpanded(id): boolean
+  expandedIds(): GitDrawerId[]
+  toggle(id): boolean      // true = the caller must fetch
+  expand(id): boolean; collapse(id): boolean; reload(id): void
+  adopt(result: GitDrawerResult): void; fail(id, message): void
+  lines(): DrawerLine[]
 }
-
-type ExplorerOutcome =
-  | ...
-  | { kind: 'preview'; path: string }   // new: a click, which is not `⏎`
-
-class ExplorerPanel {
-  activate(): ExplorerOutcome                          // was private
-  clickRow(row: number, area: Rect): ExplorerOutcome   // was `: boolean`
-}
-class SidebarPanels {
-  previewTarget(): string | null   // the file to seed an empty preview with
-}
+function rowText(row): string
+function fitRowText(row, width): string        // criterion 8 lives here
+function prettyRemoteUrl(url): string          // owner/repo, whatever the spelling
+function prettyWorktree(row): string           // folder + ⎇ branch, never a path
+function drawerMenu(row): MenuItem[]
+function drawerCommand(row, menuId): DrawerCommand | null
+function copyToClipboard(write, text, what): { sent: boolean; message: string }
+function osc52(text): string
 ```
 
-`leap-chorus pane list` gained `tabId` and `workspaceId`, and a `--herdr-json` flag. There
-is a new `leap-chorus tab list|focus|close`. Both are explained under *Surprises*.
+`ScmPanel` gained `readonly drawers: DrawersPanel`, two `ScmOutcome` arms
+(`drawer`, `drawerMenu`) and two new `Row` kinds; `HitRegions.actionRow` gained
+`files: { x, end } | null`.
 
-## The data root
+## The decisions PHASE-11 asked for
 
-```
-<dataRoot>/plugins/
-  registry.json     what is installed, and what it is pinned to (durable, one .bak)
-  store/<id>/       the checkout, as fetched and built
-  config/<id>/      HERDR_PLUGIN_CONFIG_DIR — the user's; kept on uninstall
-  state/<id>/       HERDR_PLUGIN_STATE_DIR
-  bin/herdr-compat  the $HERDR_BIN_PATH shim, rewritten on every `plugin …` call
-  tmp/              install scratch; nothing here survives a failed install
-```
+**1. The Branches drawer and the branch picker share one RPC — deliberately.**
+herdr-sidebar's drawer runs `branch -a --sort=-committerdate --format='%(HEAD)
+%(refname:short)'`. Ours runs the picker's `for-each-ref`, now `BRANCH_REF_ARGS` in
+`git.ts` and read by both. Two reasons, and the second is the real one: `branch -a`
+hands back display text that would have to be un-rendered into the same three fields we
+already have, and it **cannot say whether a ref is symbolic** — so `origin/HEAD` would
+appear as a row whose `Checkout Branch` entry silently detaches HEAD at a branch nobody
+picked. The drawer slices the shared result to 30.
 
-The registry is written by the **client** during `plugin install` and re-read by the
-daemon on every use. Install means a `git fetch` and then a stranger's build script, which
-has no business inside the process that owns every PTY, and the confirmation it must ask
-for is on a terminal the daemon does not have. herdr splits it the same way and for the
-same reason. A cached store in the daemon would go stale the moment a user installed
-something; the file is a few hundred bytes.
+**2. Clipboard: OSC 52, and it says so.** The four `Copy …` entries are kept. OSC 52 is
+the terminal-native answer and it is the one that works over SSH — `pbcopy` spawned on
+a server copies into the server's clipboard, which nobody can paste from. It has **no
+reply**, and some terminals discard it, so the note reads *"hash sent to clipboard (OSC
+52 — ignored by some terminals)"* rather than "copied". The phase's alternative was
+dropping the entries; an entry that quietly does nothing is the failure both options
+were avoiding.
 
-## Which plugins were tested, at which versions
-
-| Plugin | Version | How |
-|---|---|---|
-| `smarzban/herdr-file-viewer` | **1.17.0**, commit `c237626260478d5f2d788149fc741ddf3c3588ba` | installed from GitHub on macOS arm64. `scripts/fetch-or-build.sh` took the fast path: "installed prebuilt v1.17.0 (aarch64-apple-darwin), verified SHA-256" — **no Rust toolchain was needed** |
-| a local fixture | n/a | `daemon/test/plugin-fixture.ts`, a real git repository; everything in CI uses this |
-
-The viewer was driven **through its own launcher scripts**, not through our RPC:
-`scripts/open-file-viewer.sh` opened it in a split, a second run closed it again (its own
-`--launch-decision` returning `CLOSE`), and `scripts/open-file-viewer-tab.sh` opened it in
-a tab. It rendered this repository's tree with git decorations and the branch name in its
-footer. **This is the only criterion requiring the network**, and it is the one that found
-the two things below.
+**3. PHASE-7's follow-ups were already applied, and this phase inherits all three.**
+`GIT_OPTIONAL_LOCKS=0`, the locale pinning and the credential-prompt guard are in
+`gitEnv` in `worktree.ts`, which `runGit` uses — so every one of the nine new git
+invocations gets them for free, which is exactly the argument PHASE-11 made for doing it
+in the runner. **Nothing was left to apply.** What remains from PHASE-7's list is the
+part nobody has done: follow-up 4 (`maxBuffer` → streaming with `spawn`) and follow-up 5
+(`--porcelain=v2`), both still open and both untouched here.
 
 ## Surprises
 
-- **It is six commands, not five — and translating commands is not enough.** The phase
-  counted five from `herdr-file-viewer`'s description. Reading its launcher scripts found
-  `tab focus <tab_id>`, which the tab launcher uses to switch to an existing viewer tab
-  instead of opening a second one; `leap-chorus` had no `tab` command at all. Worse, the
-  *output* is part of the contract: `open-file-viewer.sh` pipes `pane list` straight into
-  the viewer binary's own Rust `launch_decision`, which deserializes
-  `{result:{panes:[{pane_id,label,focused,tab_id}]}}` and **answers `OPEN` for anything it
-  cannot parse**. Our `pane list` printed a bare camelCase array and carried no `tab_id` at
-  all — close enough to look right, and different enough that the plugin would have worked
-  while silently losing focus-and-close forever, opening a new viewer on every keypress.
-  Hence `pane list --herdr-json`, which only the shim sets. **A compatibility shim that
-  only translates argv is a shim that half works, and the half that fails is silent.**
-- **A plugin starts in its own directory, not the user's.** `herdr-file-viewer`'s manifest
-  is `command = ["./target/release/herdr-file-viewer"]` — a *relative* program. This host
-  had copied the obvious-looking thing, the focused pane's cwd, and it survived every
-  fixture because a fixture declares an absolute `sh`. Started in the user's repository
-  the program is not there, the pane's process dies immediately, and the pane closes
-  itself a frame later: indistinguishable from a plugin that opened and instantly crashed,
-  with nothing on screen to read. herdr's `plugin_pane_cwd` defaults to `plugin_root` and
-  so does its action runner. A plugin that wants the user's directory reads
-  `focused_pane_cwd` out of `HERDR_PLUGIN_CONTEXT_JSON`, which is what that field is for —
-  and it is how the viewer shows the right tree while running from somewhere else.
-- **`survival.test.ts`'s flake was never the survival assertion.** Three handoffs called
-  it undiagnosed. It is `ENOTEMPTY: directory not empty, rmdir …/daemon` out of
-  `cleanupDataRoots`: `stop()` sent SIGKILL after a 5 s SIGTERM timeout and then
-  **returned without waiting**, so teardown deleted the data root while a live daemon was
-  still writing its session file into it. `rmSync` walks the tree, the daemon puts a file
-  back, `rmdir` fails — and a teardown failure fails the *test*, which is how a harness
-  race looked like a product bug for three phases. Fixed by waiting for the SIGKILL to
-  land, plus a bounded retry in `cleanupDataRoots` as a backstop. It went from 1/5 to 6/6
-  in isolation at load 18.
-- **The click gesture was wrong, and the first fix was wrong in the other direction.**
-  Reported from a screenshot: folders "not getting nested". A click on an Explorer row
-  only moved the cursor — it never expanded anything — so a folder looked inert to anyone
-  using a mouse. The first fix made a click mean `⏎`, which with `[sidebar] preview` off
-  hands the file to `$PAGER` **in a new pane**: clicking down a tree left one pane per
-  click, and since the dock holds the keyboard none of them could even be scrolled. A
-  click and `⏎` are not the same request. A click now folds a directory and previews a
-  file in the dock; `⏎` is unchanged.
-- **The preview's empty state was a lie about its own state.** Switching to the Preview
-  view with a file highlighted in the tree said "nothing selected", because only `⏎` and
-  the row menu had ever handed it a path. It now seeds from the tree's cursor, and still
-  says nothing is selected when that cursor is on a directory.
-- **A plugin's pane needed no new pane type, exactly as the phase said.** `pane.split` and
-  `tab.create` with an argv, and the only thing missing was `command`/`args` on
-  `tab.create` — which `workspace.create` has had since phase 4 and `pane.split` since
-  before that. Three lines in the reducer.
-- **Idempotency is per entrypoint, not per placement**, and that turned out to be the
-  reading the plugin's own launcher agrees with: asking for the viewer in a tab when it is
-  already open in a split focuses the split. The thing the user wants is the viewer, not
-  another one.
+- **`git log --graph --oneline` is a display format, and PHASE-11 says not to re-parse
+  display text.** Those two facts collide, and the resolution is the one thing this
+  phase does that is not herdr-sidebar's command verbatim: the log drawers run
+  `--format=%x00%H%x00%h%x00%D%x00%ad%x00%s`. The leading NUL is load-bearing —
+  everything before the first NUL on a line is the rail git drew, and a line with **no**
+  NUL is pure art (`|\`, `|/`) and becomes a `rail` row. So the rails still come from
+  git, drawn exactly as given, and the hash arrives as a field. It is the same
+  `git log --graph`; only the format is ours.
+- **`:(top)` is what makes a drawer cost one git command.** Every other query works from
+  any directory inside a checkout, but `--follow` needs a pathspec, and a repo-relative
+  path means nothing from a subdirectory. Pathspec magic fixes it:
+  `-- ':(top)a file.txt'` resolves against the top of the working tree wherever the
+  pane's shell happens to be. Verified from a subdirectory, and with a space in the
+  name. Without it every drawer would have paid for a `rev-parse --show-toplevel` first
+  and criterion 7 would have been "two commands".
+- **`git revert` refuses a merge commit, and that is the right answer to relay.**
+  `-m 1` is a decision about which parent's history to keep, and a menu entry with
+  nowhere to ask must not make it. git's own sentence says exactly that; a test asserts
+  we pass it through rather than guessing a side.
+- **`git log` has no stable order for commits sharing a timestamp**, which a test that
+  builds four commits in 300 ms discovers immediately. The assertion is the set, plus
+  "the merge is first".
+- **The changes list's "no changes" had to become a row.** It used to be a message drawn
+  *instead of* the list, and with eight drawers under it the list is never empty, so the
+  message would never have appeared again.
+- **`branch -d`, not `-D`.** The confirmation is about deleting a branch, not about
+  losing commits. git's refusal names the unmerged branch and the flag that would force
+  it, which is more than the dialog could say. Same instinct as `reset --mixed`: no menu
+  entry in this project passes `--hard`.
+
+## Numbers
+
+**Criterion 10 was not measured.** `uptime` reported load average **15.05** for the
+whole session, and the previous two handoffs record the same obstacle. What can be said
+without the benchmark: the only render-path change is in `renderScmPanel`, which gained
+one branch per drawn row and one `fitRowText` call per *drawer* row — bounded by the
+dock's height (tens of rows), against a pane renderer that handles thousands of cells.
+Nothing in `app.ts`'s geometry or the pane path was touched.
+
+`bench/RESULTS.md` still has the defect two handoffs have now named: **the generator
+destroys its hand-written sections**. `git checkout -- bench/RESULTS.md` after any run.
+This is the third handoff to say so; the fix is code, not another sentence here.
 
 ## Open threads deliberately left
 
-- **`multiplexer.test.ts` is still flaky and is a different cause.** Roughly 1 run in 6 at
-  load 12, failing on `expected 0 to be greater than or equal to 2` — a timing assertion,
-  not a teardown race. It passes in isolation. Unchanged by this phase and still
-  undiagnosed; the `survival.test.ts` fix does not touch it.
-- **No event hooks, no startup commands, no link handlers**, per the phase's "do NOT do"
-  list. The manifest reader parses and names them; nothing fires them. A plugin whose whole
-  behaviour is event hooks will install cleanly and do nothing, and the install preview
-  says so.
-- **No `plugin enable`/`disable`.** herdr has both. `plugin list --json` reports
-  `enabled: true` for anything whose files are present, so a script that filters on it
-  sees every plugin it can run rather than none.
-- **No plugin log.** herdr keeps a ring of command logs (`plugin log list`); an action's
-  output comes back to the caller here and is not retained.
-- **Windows is not supported**, per the phase and per PLAN.md. `windows` *parses* in a
-  manifest — refusing the word would make every cross-platform plugin uninstallable here —
-  and nothing declared `windows`-only is ever offered.
-- **Sidebar and preview cannot be visible at once**, and that is the largest remaining
-  shape difference from herdr-sidebar. Now an orphan in `PARITY.md` with a tabbed file
-  header beside it; neither is owned by a phase.
-- **Still no syntax highlighting.** Unchanged from phase 9: the dock paints its own styles
-  and cannot consume ANSI, so `bat` runs `--color=never`. It needs an ANSI-to-`Style`
-  parser, which is real work and not a renderer swap.
-- **`follow-pane` still does not work.** Named in phase 9 and in `PARITY.md`; nothing in
-  this phase touched `app.ts`'s geometry.
-- **Nothing has run against a real `rg`, `bat`, `glow` or `delta`.** Unchanged and still
-  the cheapest available coverage win — `brew install ripgrep bat glow git-delta`, then
-  re-run `daemon/src/preview.test.ts` and `client/test/search.test.ts`.
-- **`DaemonClient` still has no request timeout**, unchanged since phase 4.
-- **`bench/RESULTS.md` was not regenerated.** Phase 10 touched no render-path code — the
-  dock's only change is what a click means — so there was nothing to measure, and the
-  generator still silently destroys the hand-written sections. `git checkout --
-  bench/RESULTS.md` after any run. **Two handoffs have now said this; the fix is code.**
-- **Criterion 2 of phase 5 is still the important gap** — detection has never been checked
-  against a running agent, and three of six platform slots have never been built.
+- **The full `pnpm test` was not run to completion at this load.** The four suites this
+  phase touches were run and pass; `source-control.test.ts` failed once when four suites
+  ran concurrently at load 15 and passed alone — the harness's `waitForText('$ ')`
+  losing a race, the same shape as the `multiplexer.test.ts` flake below. **Run
+  `pnpm test` on a quiet machine before trusting the 1,389 + 60 figure.**
+- **No end-to-end drawer test through `TuiHarness`.** The keystroke-level path — open
+  the git view, walk to Stashes, `m`, cancel — is covered by unit tests on both sides of
+  the wire but not by a test that drives the assembled program. It was cut for time, not
+  for a reason; it is the obvious next test to write.
+- **`multiplexer.test.ts` is still flaky and still undiagnosed.** Unchanged from phase
+  10: roughly 1 run in 6 at load 12, `expected 0 to be greater than or equal to 2`.
+- **No drawer refresh on its own.** Same rule as phase 7: nothing polls. A `git commit`
+  run in the pane behind the panel needs `r`, which now re-reads the status and every
+  *open* drawer and nothing else.
+- **`Show Changes` is still a pager pane.** Phase 9 owns the in-panel diff question and
+  did not reverse it; this phase did not reopen it.
+- **The drawers are cramped in `unified` layout.** They live in the lower half of the
+  Explorer view, which grows when a drawer is open but is capped at half the body. The
+  `separate` layout (`3`, or `C-b g`) is where they are meant to be read.
+- **No `git` command outside PHASE-11's table.** No rebase UI, no branch or tag
+  creation, no push from the Remotes drawer, no conflict resolution. The failure mode
+  of this phase was becoming a git client and it did not.
+- **Everything in phase 10's *Open threads* that was not about plugins is still open**:
+  `follow-pane` unwired, no syntax highlighting, no `rg`/`bat`/`glow`/`delta` on this
+  machine, `DaemonClient` has no request timeout, and phase 5's criterion 2 (detection
+  against a running agent) is still the important gap.
+
+## Three defects fixed after the phase, all reported from screenshots
+
+These are not PHASE-11 work. They were found by looking at the running program while
+the phase was being reviewed, and each one had been shipped for several phases.
+
+**1. The dock kept the keyboard from the panes it opened.** `⏎` on a file opens it in
+`$PAGER` and focuses that pane — and then every keystroke still went to the dock,
+because `handleKey` routed to the panel for as long as it was open. A pager that cannot
+scroll is not an opened file. The same bug made the `$EDITOR` entry, the diff pane, the
+shell-here entry and `Open Worktree` all open something unusable. Phase 10's handoff saw
+the symptom on click-spawned panes and read it as a reason not to spawn them; this was
+the cause. `TuiApp.dockFocused` now exists: the dock keeps the keyboard while you work
+in it and releases it (`releaseDock`) the moment it opens a pane, staying on screen,
+dimmed. `C-b e` / `C-b g` / `C-b f` or a click take it back — and `C-b e` on an
+unfocused dock now *focuses* it rather than closing it.
+
+**2. The Preview view drew a file in 34 columns.** The dock's width was capped at
+`cols/3` for every view. Three of the four views are lists of paths and are fine there;
+the fourth is a file, and the result was a column of `…` next to two idle shells with
+three quarters of the screen empty. `SidebarPanels.preferredWidth` now answers per
+view: lists get the old behaviour, Preview asks for `34 + 1 + 80` capped at **half** the
+screen, and `previewAreas` puts the tree back on the left when the body is at least
+107 columns. Clicking a row in that tree previews it beside itself — which is
+herdr-sidebar's actual shape, and closes `PARITY.md`'s largest orphan.
+
+**3. The workspace list said less than it knew.** Three changes, all rendering except
+the first:
+
+- **`git.summary`** — a new RPC, `{ paths[] } → { summaries[] }`, one
+  `status --porcelain -z --branch --untracked-files=no` per directory, parsed with the
+  panel's own `parseStatus` so the two can never disagree. It draws the branch and
+  ahead/behind under each workspace name. Fetched when the workspace set or their cwds
+  change and after a dock git action; **never polled**, and keyed so an ordinary
+  snapshot costs a string comparison.
+- The agent status glyph **leads** the workspace row instead of sitting between the
+  name and the pane count, where it read as part of the numbers.
+- Agent rows are now `<task> · <tool>` over `<state> · <workspace name>`. They were
+  `<tool>` over `<pane title>` with the workspace as a right-aligned *number*, which
+  printed `claude` four times down a list of four agents and made the one thing that
+  distinguishes them the dim half.
+
+```ts
+interface GitRepoSummary {
+  path: string; isRepo: boolean; branch: string
+  ahead: number; behind: number; hasUpstream: boolean
+  dirty: boolean          // tracked changes only; untracked files do not count
+}
+'git.summary': { params: { paths: readonly string[] }; result: { summaries: readonly GitRepoSummary[] } }
+
+// client
+class SidebarPanels {
+  preferredWidth(cols: number, configured: number): number
+  previewAreas(body: Rect): { tree: Rect | null; preview: Rect }
+  previewWidth(area: Rect): number
+}
+renderSidebar(..., dockRight?: boolean, summaries?: ReadonlyMap<string, GitRepoSummary>)
+```
+
+**None of the three has a test.** They were verified by rendering the sidebar into a
+buffer and reading it, and by the existing 18 sidebar and 23 source-control tests still
+passing. The geometry (`preferredWidth`, `previewAreas`) is pure and is the obvious
+thing to pin down first.
+
+## The sidebar mock-up, since it came up
+
+A mock-up was shown alongside the running app and the difference is worth writing down
+rather than rediscovering:
+
+| In the mock-up | Here |
+|---|---|
+| a `spaces` section header | **built after the phase** |
+| a **branch line under each workspace** (`main ↑1`) | **built after the phase** — `git.summary`, see above |
+| a status dot per workspace | **built** — `workspaceAgentStatus` + `agentGlyph`, drawn between the name and the pane count. It is blank because nothing in that session had a detected agent |
+| an `agents` section, two lines per agent | **built** — `renderAgentSection` in `chrome.ts`. It renders only when `agentEntries(state)` is non-empty, i.e. when a pane has both `agent` and `agentStatus` set by detection. A plain shell sets neither, so the section is skipped entirely |
+| a `grouped` toggle on that section | not built; now an orphan in `PARITY.md` |
+| workspaces named `acme-app`, `acme-api` | works today — a workspace with a label shows it; `workspaceTitle` falls back to `workspace N` |
+
+Of the six, four are now built, one (`grouped`) is not and is recorded as an orphan,
+and the agents section turned out to have been working all along — it only ever needed
+a pane with a detected agent in it, which a plain shell is not.
 
 ## Getting started in a new session
 
@@ -418,21 +365,12 @@ the two things below.
 pnpm install
 pnpm build
 ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus
-pnpm test                                    # 1,389 tests; do not run anything alongside it
+pnpm test                                    # do not run anything alongside it
+
 leap-chorus                                  # C-b e files · C-b f search · C-b g git · 1/2/3/4
+#   in the git view: ↑↓ move · ⏎ open a drawer · →← open/close · m row menu · r refresh
+#   the workspace strip's action row: new · ▤ files · menu
 
-# the plugin host
-leap-chorus plugin install smarzban/herdr-file-viewer --yes
-leap-chorus plugin list --json
-leap-chorus plugin verify
-leap-chorus plugin shim                      # what $HERDR_BIN_PATH points at
-leap-chorus plugin pane open --plugin herdr-file-viewer --entrypoint file-viewer
-
-# and what a plugin's own launcher does, by hand
-HERDR_BIN_PATH=$(leap-chorus plugin shim) \
-  bash ~/.leap-chorus/plugins/store/herdr-file-viewer/scripts/open-file-viewer.sh
-
-brew install ripgrep bat glow git-delta      # then re-run search and preview tests
 uptime && node bench/dist/render-scale.js --seconds 15
 git checkout -- bench/RESULTS.md             # THE BENCHMARK DESTROYS IT
 pgrep -f leap-chorusd                        # a leaked daemon forks `ps` every 750 ms

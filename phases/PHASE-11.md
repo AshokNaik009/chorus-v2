@@ -1,4 +1,9 @@
-# Phase 11 — The Source Control drawers
+# Phase 11 — The Source Control drawers ✅ **COMPLETE**
+
+**Status: shipped.** 9 of 10 criteria met; criterion 10 (no bench regression) was not
+measurable at load 15. `../HANDOFF.md` is this phase's handoff and is the authority on
+what landed. Do not re-run this phase.
+
 
 **Read `../PLAN.md`, `PARITY.md` and `../HANDOFF.md` first.**
 

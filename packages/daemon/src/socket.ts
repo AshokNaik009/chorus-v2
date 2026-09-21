@@ -43,6 +43,7 @@ import { PluginRunner } from './plugins/run.js'
 import { PreviewService } from './preview.js'
 import { SearchService } from './search.js'
 import { SuggestService } from './suggest.js'
+import { GitDrawerService } from './git-drawers.js'
 import { GitService } from './git.js'
 import { WorktreeService } from './worktree.js'
 import type { IntegrationOptions } from './integration/install.js'
@@ -118,6 +119,8 @@ export class DaemonServer {
   private readonly worktreeService = new WorktreeService()
   /** Working-tree git: status, staging, commits. Stateless for the same reason. */
   private readonly gitService = new GitService()
+  /** The eight Source Control drawers. One git command each, on expand. */
+  private readonly gitDrawerService = new GitDrawerService()
   /** Directory listings for the explorer. The client has no filesystem of its own. */
   private readonly fsService = new FsService()
   /** Quick open and content search. Shells out to `rg`; stateless like the rest. */
@@ -140,6 +143,7 @@ export class DaemonServer {
   private gitContext(): gitRpc.GitContext {
     return {
       git: this.gitService,
+      drawers: this.gitDrawerService,
       suggest: this.suggestService,
       fs: this.fsService,
       paneCwdInput: (paneId) => this.runtime.paneCwdInput(paneId)
@@ -605,6 +609,12 @@ export class DaemonServer {
         return gitRpc.gitSync(this.gitContext(), params)
       case 'git.suggest':
         return gitRpc.gitSuggest(this.gitContext(), params)
+      case 'git.summary':
+        return gitRpc.gitSummary(this.gitContext(), params)
+      case 'git.drawer':
+        return gitRpc.gitDrawer(this.gitContext(), params)
+      case 'git.drawerAction':
+        return gitRpc.gitDrawerAction(this.gitContext(), params)
       case 'worktree.list':
         return worktrees.worktreeList(this.worktreeContext(), params)
       case 'worktree.create':

@@ -11,25 +11,35 @@ import {
   ErrorCodes,
   type FsListResult,
   type GitBranchesResult,
+  type GitDrawerActionId,
+  type GitDrawerActionResult,
+  type GitDrawerId,
+  type GitDrawerResult,
   type GitStatusResult,
   type GitSuggestResult,
+  type GitSummaryResult,
   type GitSyncResult
 } from '@leap-chorus/protocol'
 import type { FsService } from '../fs.js'
 import { liveCwd } from '../cwd.js'
+import { DRAWER_IDS, type GitDrawerService } from '../git-drawers.js'
 import type { GitService, GitStatus } from '../git.js'
 import type { SuggestService } from '../suggest.js'
 import {
   RequestError,
   optionalBoolean,
+  optionalNumber,
   optionalString,
   optionalStringArray,
+  requireEnum,
   requireString,
   type Params
 } from './params.js'
 
 export interface GitContext {
   readonly git: GitService
+  /** The eight drawers. Separate from `git`: it reads history, not the working tree. */
+  readonly drawers: GitDrawerService
   /** Commit-message drafting. See `suggest.ts` for why the model half is opt-in. */
   readonly suggest: SuggestService
   readonly fs: FsService
@@ -153,4 +163,62 @@ export async function gitSuggest(context: GitContext, params: Params): Promise<G
   const cwd = await resolveCwd(context, params)
   const status = await context.git.status(cwd)
   return context.suggest.suggest(status.root, status, optionalBoolean(params, 'ai') ?? false)
+}
+
+/**
+ * One header line per directory.
+ *
+ * Capped, because the parameter is a list and a list from a client is a number this
+ * daemon did not choose. Sixteen is more workspaces than a sidebar can draw.
+ */
+export async function gitSummary(context: GitContext, params: Params): Promise<GitSummaryResult> {
+  const paths = (optionalStringArray(params, 'paths') ?? []).slice(0, 16)
+  return { summaries: await context.git.summary(paths) }
+}
+
+/** The twelve menu entries that reach git. Everything else is another RPC already. */
+const DRAWER_ACTIONS: readonly GitDrawerActionId[] = [
+  'commit.checkout',
+  'commit.cherryPick',
+  'commit.revert',
+  'commit.reset',
+  'branch.merge',
+  'branch.delete',
+  'stash.apply',
+  'stash.pop',
+  'stash.drop',
+  'remote.fetch',
+  'tag.checkout',
+  'tag.delete'
+]
+
+/**
+ * One drawer's rows.
+ *
+ * No root resolution: every drawer query works from anywhere inside the checkout, so
+ * opening a drawer is exactly one `git` invocation. See `git-drawers.ts`.
+ */
+export async function gitDrawer(context: GitContext, params: Params): Promise<GitDrawerResult> {
+  const drawer = requireEnum(params, 'drawer', DRAWER_IDS as readonly GitDrawerId[])
+  const cwd = await resolveCwd(context, params)
+  const { rows, note } = await context.drawers.rows(cwd, {
+    drawer,
+    path: optionalString(params, 'path'),
+    limit: optionalNumber(params, 'limit')
+  })
+  return { drawer, rows, note }
+}
+
+/**
+ * A drawer row's menu entry.
+ *
+ * The status comes back with it for the same reason every other mutation returns one:
+ * a cherry-pick, a reset and a stash pop all change what is staged, and a panel that
+ * had to re-read to find out would always re-read.
+ */
+export async function gitDrawerAction(context: GitContext, params: Params): Promise<GitDrawerActionResult> {
+  const action = requireEnum(params, 'action', DRAWER_ACTIONS as readonly GitDrawerActionId[])
+  const cwd = await resolveCwd(context, params)
+  const message = await context.drawers.act(cwd, action, requireString(params, 'ref'))
+  return { message, status: wire(await context.git.status(cwd)) }
 }

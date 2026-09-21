@@ -103,6 +103,8 @@ import {
 } from './prompt.js'
 import { playSound, type SoundKind } from './sound.js'
 import type { ScmOutcome } from './scm.js'
+import { drawerCommand, drawerMenu } from './drawers.js'
+import { copyToClipboard } from './clipboard.js'
 import type { ExplorerOutcome } from './explorer.js'
 import { SidebarPanels, panelSettings, type PanelOutcome, type ViewId } from './panel.js'
 import type { PreviewOutcome } from './preview.js'
@@ -111,12 +113,20 @@ import { BRANCH_HINT, BranchPicker, type BranchOutcome } from './branch.js'
 import type {
   FsListResult,
   GitBranchesResult,
+  GitDrawerActionId,
+  GitDrawerActionResult,
+  GitDrawerId,
+  GitDrawerResult,
+  GitDrawerRow,
+  GitRepoSummary,
   GitStatusResult,
+  GitSummaryResult,
   GitSyncResult,
   GitSuggestResult,
   PreviewResult,
   SearchContentResult,
-  SearchFilesResult
+  SearchFilesResult,
+  WorktreeRemoveResult
 } from '@leap-chorus/protocol'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
@@ -205,6 +215,18 @@ export interface FrameStats {
 
 export class TuiApp {
   private state: SessionStateSnapshot = EMPTY_STATE
+  /**
+   * The branch line under each workspace row, by workspace id.
+   *
+   * Fetched, never polled — the same rule the panel follows. It is re-read when the
+   * *set of workspaces or their directories* changes, and when a git action in the
+   * dock succeeds; a `git commit` typed into a pane needs `r` like everything else.
+   * A stale branch here is one line of chrome, which is the trade that keeps a
+   * sidebar from forking `git status` every second.
+   */
+  private repoSummaries = new Map<string, GitRepoSummary>()
+  /** The workspace cwds the map was built from, so an unchanged list costs nothing. */
+  private summaryKey = ''
   private config: Config = DEFAULT_CONFIG
   private keymap: Keymap
   private palette: Palette
@@ -258,6 +280,22 @@ export class TuiApp {
   private menu: { menu: ContextMenu; choose(id: string): Promise<void> } | null = null
   /** The settings dialog, or null when it is closed. */
   private settings: SettingsDialog | null = null
+  /**
+   * Whether the dock has the keyboard, when it is open at all.
+   *
+   * It does not always, and that is the whole point of the flag. The dock's job is
+   * partly to *open things elsewhere* — a file in `$PAGER`, a diff, `$EDITOR`, a shell
+   * in a folder — and until this existed every one of those panes was spawned, focused
+   * in the model, and then left unable to receive a single keystroke, because
+   * `handleKey` handed everything to the panel for as long as it was open. A pager you
+   * cannot scroll is not an opened file. Phase 10's handoff noticed the symptom on
+   * click-spawned panes and treated it as a reason not to spawn them; it was this.
+   *
+   * So: the dock keeps the keyboard while you are working *in* it, and hands it over
+   * the moment it opens something to read. The dock stays on screen, dimmed rather
+   * than gone, and `C-b e` / `C-b g` / `C-b f` or a click take it back.
+   */
+  private dockFocused = true
   /**
    * The docked panel — explorer, search and source control — or null when it is closed.
    *
@@ -420,6 +458,7 @@ export class TuiApp {
     const previous = this.state
     this.ringForAgentChanges(previous, state)
     this.state = state
+    void this.refreshRepoSummaries()
 
     // Retire views for panes that are gone, and make views for panes that are new.
     const live = new Set(state.panes.map((pane) => pane.paneId))
@@ -602,8 +641,12 @@ export class TuiApp {
     }
     // The panel needs room a workspace list does not: a path plus its status letter.
     const configured = this.sidebarWidthOverride ?? this.config.ui.sidebarWidth
-    const wanted = this.panels === null ? configured : Math.max(configured, this.panels.minWidth())
-    const width = Math.max(MIN_SIDEBAR_WIDTH, Math.min(wanted, Math.floor(this.cols / 3)))
+    // The dock asks for its own width, because how much it needs depends on which view
+    // is showing: three of them are lists of paths and the fourth is a file. See
+    // `SidebarPanels.preferredWidth`.
+    const wanted =
+      this.panels === null ? Math.min(configured, Math.floor(this.cols / 3)) : this.panels.preferredWidth(this.cols, configured)
+    const width = Math.max(MIN_SIDEBAR_WIDTH, wanted)
     // Capped at a third of the screen on both sides, so docking right can no more
     // collapse the panes than docking left can. At 80 columns that is 26 for the dock
     // and 54 for everything else, which is criterion 9's case.
@@ -799,13 +842,41 @@ export class TuiApp {
     }
   }
 
-  /** A view's own key closes the dock when that view is already the one showing. */
+  /**
+   * A view's own key closes the dock when that view is already the one showing —
+   * unless the dock does not currently have the keyboard, in which case the key means
+   * "come back", not "go away". Pressing `C-b e` while reading a file the tree opened
+   * should put you back in the tree, and closing it then would be the opposite.
+   */
   private async togglePanel(view: ViewId): Promise<void> {
     if (this.panels !== null && this.panels.active() === view) {
+      if (!this.dockFocused) {
+        this.focusDock()
+        return
+      }
       this.closePanels()
       return
     }
     await this.openPanel(view)
+  }
+
+  /** Give the dock the keyboard back. */
+  private focusDock(): void {
+    this.dockFocused = true
+    this.requestRender()
+  }
+
+  /**
+   * The dock has opened something to read: hand the keyboard to it.
+   *
+   * Called by every dock action that spawns or focuses a pane. The dock stays open —
+   * herdr-sidebar's viewer sits beside its tree and this is the nearest thing a single
+   * docked column has to that — but the keys now go where the content is.
+   */
+  private releaseDock(): void {
+    if (this.panels === null) return
+    this.dockFocused = false
+    this.requestRender()
   }
 
   private async handleKey(key: Key, bytes: Uint8Array): Promise<void> {
@@ -840,7 +911,7 @@ export class TuiApp {
     // The panel owns the keyboard while it is open, for the reason scm.ts gives: `d`
     // discards a file here and is an ordinary keystroke to the shell behind it. The
     // prefix still wins, so `C-b` reaches the multiplexer from inside the panel.
-    if (this.panels !== null && !this.prefixArmed && !isPrefix(this.keymap, key)) {
+    if (this.panels !== null && this.dockFocused && !this.prefixArmed && !isPrefix(this.keymap, key)) {
       // The container decides what is a view switch, what is a panel gesture, and what
       // belongs to the active view. `1` `2` `3` and `Ctrl+P` are its, not ours.
       await this.applyPanelOutcome(this.panels.handleKey(this.panelKey(key)))
@@ -991,8 +1062,10 @@ export class TuiApp {
     const record = paneById(this.state, target.paneId)
     if (record === null || record.exited) return
 
-    if (mouse.kind === 'down' && target.paneId !== this.state.focusedPaneId) {
-      await this.call('pane.focus', { paneId: target.paneId })
+    if (mouse.kind === 'down') {
+      // Clicking a pane is asking to type in it, whatever the dock was doing.
+      this.releaseDock()
+      if (target.paneId !== this.state.focusedPaneId) await this.call('pane.focus', { paneId: target.paneId })
     }
 
     const tracking = view.snapshot?.keyboard?.mouseTracking ?? 'none'
@@ -1558,6 +1631,9 @@ export class TuiApp {
    * before this phase and still means now.
    */
   private async openPanel(view: ViewId): Promise<void> {
+    // Asking for a view is asking to use it, so the dock takes the keyboard back even
+    // when it was already open behind a pager.
+    this.dockFocused = true
     if (this.panels === null) {
       // `[sidebar] remember-view` decides whether reopening lands on the view you left
       // or on the one the command names. A command that names a view always wins —
@@ -1612,6 +1688,41 @@ export class TuiApp {
     this.requestRender()
   }
 
+  /**
+   * Re-read the branch line for every workspace, when the list has actually changed.
+   *
+   * Keyed on the workspace ids and their directories, so the common case — a pane
+   * opening, output arriving, focus moving — costs a string comparison and no round
+   * trip. `adoptState` runs on every snapshot, and a `git status` per workspace on
+   * every snapshot is exactly the thing PHASE-11 refused to do for the drawers.
+   */
+  private async refreshRepoSummaries(force = false): Promise<void> {
+    const workspaces = this.state.workspaces
+    const key = workspaces.map((workspace) => `${workspace.workspaceId}:${workspace.cwd}`).join('|')
+    if (!force && key === this.summaryKey) return
+    this.summaryKey = key
+    if (workspaces.length === 0) {
+      this.repoSummaries = new Map()
+      return
+    }
+    try {
+      const result = (await this.options.client.call('git.summary', {
+        paths: workspaces.map((workspace) => workspace.cwd)
+      } as never)) as GitSummaryResult
+      const byPath = new Map(result.summaries.map((summary) => [summary.path, summary]))
+      const next = new Map<string, GitRepoSummary>()
+      for (const workspace of workspaces) {
+        const summary = byPath.get(workspace.cwd)
+        if (summary !== undefined) next.set(workspace.workspaceId, summary)
+      }
+      this.repoSummaries = next
+      this.requestRender()
+    } catch {
+      // A sidebar line is not worth a visible error: the row simply has no branch.
+      this.repoSummaries = new Map()
+    }
+  }
+
   /** Re-read the status. Every mutation returns one, so this is only for open and `r`. */
   private async refreshScm(): Promise<void> {
     const panels = this.panels
@@ -1623,6 +1734,67 @@ export class TuiApp {
       return
     }
     await this.callScm('git.status', { paneId })
+    // `r` means "the repository moved under me", which is true of the sidebar's branch
+    // lines as well as of this panel.
+    void this.refreshRepoSummaries(true)
+    // And whichever drawers are open — which is none of them unless the user opened
+    // one. That is the whole of PHASE-11's caching story: a refresh with everything
+    // collapsed runs one `git status` and not nine.
+    for (const id of panels.scm.drawers.expandedIds()) {
+      panels.scm.drawers.reload(id)
+      await this.fetchDrawer(id)
+    }
+  }
+
+  /**
+   * Fetch one drawer's rows.
+   *
+   * One RPC, one `git` command. The reply is dropped if the dock has closed or the
+   * drawer has been collapsed since — see `DrawersPanel.adopt`.
+   */
+  private async fetchDrawer(id: GitDrawerId): Promise<void> {
+    const panels = this.panels
+    const paneId = this.scmPaneId()
+    if (panels === null) return
+    if (paneId === null) {
+      panels.scm.drawers.fail(id, 'no focused pane')
+      this.requestRender()
+      return
+    }
+    // File History is the one drawer that needs something selected, and it says so
+    // itself rather than being hidden — a drawer that disappears reads as broken.
+    const path = id === 'fileHistory' ? this.drawerFilePath() : undefined
+    if (id === 'fileHistory' && path === null) {
+      panels.scm.drawers.adopt({ drawer: id, rows: [], note: 'select a file to see its history' })
+      this.requestRender()
+      return
+    }
+    try {
+      const result = (await this.options.client.call('git.drawer', {
+        paneId,
+        drawer: id,
+        ...(path === undefined || path === null ? {} : { path })
+      } as never)) as GitDrawerResult
+      if (this.panels === panels) panels.scm.drawers.adopt(result)
+    } catch (error) {
+      if (this.panels === panels) panels.scm.drawers.fail(id, messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /**
+   * Whose history File History shows: the changes list's selection, else the tree's.
+   *
+   * Two cursors can name a file and both are the user pointing at one. The changes
+   * list wins because that is the view the drawer is in.
+   */
+  private drawerFilePath(): string | null {
+    const panels = this.panels
+    if (panels === null) return null
+    const row = panels.scm.selected()
+    if (row?.entry !== undefined) return row.entry.path
+    const node = panels.explorer.selected()
+    return node !== null && node.kind === 'file' && node.path !== '' ? node.path : null
   }
 
   /**
@@ -1722,7 +1894,9 @@ export class TuiApp {
       this.requestRender()
       return
     }
-    const width = this.sidebarArea()?.width ?? MIN_SIDEBAR_WIDTH
+    // The columns the *file* gets, not the dock's: with the tree beside it they differ.
+    const area = this.sidebarArea()
+    const width = area === null ? MIN_SIDEBAR_WIDTH : panels.previewWidth(area)
     this.requestRender()
     try {
       const result = (await this.options.client.call('preview.read', {
@@ -1816,6 +1990,13 @@ export class TuiApp {
         await this.draftCommit(paneId)
         return
       }
+      case 'drawer':
+        if (outcome.fetch) await this.fetchDrawer(outcome.id)
+        this.requestRender()
+        return
+      case 'drawerMenu':
+        this.openDrawerMenu(outcome.drawer, outcome.row)
+        return
       case 'commit': {
         if (paneId === null) return
         if (panel.status === null || panel.status.staged.length === 0) {
@@ -1835,6 +2016,7 @@ export class TuiApp {
         const args = outcome.staged
           ? ['diff', '--staged', '--', outcome.path]
           : ['diff', '--', outcome.path]
+        this.releaseDock()
         await this.call('pane.split', {
           direction: 'right',
           focus: true,
@@ -1992,6 +2174,10 @@ export class TuiApp {
     const panels = this.panels
     if (sidebar === null || panels === null) return false
     if (!contains(sidebar, mouse.column, mouse.row)) return false
+    // Clicking in the dock is asking to use it, so it takes the keyboard back — the
+    // mirror of `releaseDock`, and the reason a wheel over it scrolls the dock rather
+    // than the pager it just opened.
+    if (mouse.kind === 'down') this.dockFocused = true
     if (mouse.kind === 'scrollup' || mouse.kind === 'scrolldown') {
       panels.scrollBy(mouse.kind === 'scrollup' ? -3 : 3, sidebar)
       this.requestRender()
@@ -2138,6 +2324,8 @@ export class TuiApp {
             // `$EDITOR` in a pane, never an editor of our own. PLAN.md's position, and
             // the reason `editor.rs`'s 1,157 lines have no counterpart here.
             const editor = process.env['EDITOR'] ?? process.env['VISUAL'] ?? 'vi'
+            // An editor with no keyboard is worse than a pager with none.
+            this.releaseDock()
             await this.call('pane.split', {
               direction: 'right',
               focus: true,
@@ -2151,6 +2339,7 @@ export class TuiApp {
             await this.applyScmOutcome({ kind: 'diff', path, staged: false })
             return
           case 'shell':
+            this.releaseDock()
             await this.call('pane.split', { direction: 'right', focus: true, cwd: `${root}/${path}` })
             return
           case 'search': {
@@ -2164,6 +2353,157 @@ export class TuiApp {
       }
     }
     this.requestRender()
+  }
+
+  /**
+   * A drawer row's context menu — PHASE-11's table, one row type at a time.
+   *
+   * The entries are `drawers.ts`'s, so the labels and the menu's shape live beside the
+   * rows they belong to; what lives here is the calls, because every other daemon call
+   * in this client lives here too.
+   *
+   * Three things this deliberately does **not** do:
+   *
+   * - **No second diff viewer.** Every `Show Changes` is `git show` in a pager pane,
+   *   which is what `o` on a changed file has done since phase 7 and what phase 9
+   *   re-examined and kept.
+   * - **No second branch checkout.** `Checkout Branch` is `git.checkout`, the same RPC
+   *   the picker uses, so a branch checked out from a drawer behaves exactly like one
+   *   checked out from the header — remote-tracking names included.
+   * - **No second way to remove a worktree.** `worktree.remove` has shipped since
+   *   phase 5 and already refuses the primary tree and a tree with panes in it.
+   */
+  private openDrawerMenu(drawer: GitDrawerId, row: GitDrawerRow): void {
+    const items = drawerMenu(row)
+    if (items.length === 0) return
+    const sidebar = this.sidebarArea()
+    this.menu = {
+      menu: new ContextMenu(items, { column: sidebar?.x ?? 0, row: 2 }),
+      choose: async (id) => {
+        await this.chooseDrawerAction(drawer, row, id)
+      }
+    }
+    this.requestRender()
+  }
+
+  /**
+   * Execute one menu entry.
+   *
+   * The decision — which RPC, and whether to ask first — is `drawerCommand`'s, in
+   * `drawers.ts`, because it is a table and a table should be readable in one place
+   * and testable without a dialog. This does the calls.
+   */
+  private async chooseDrawerAction(drawer: GitDrawerId, row: GitDrawerRow, id: string): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    const command = drawerCommand(row, id)
+    if (command === null) return
+    switch (command.kind) {
+      case 'copy': {
+        // The one entry that never touches git. See `clipboard.ts` for why the message
+        // says the copy may not have landed rather than claiming it did.
+        panels.scm.report(copyToClipboard(this.options.write, command.text, command.what).message)
+        this.requestRender()
+        return
+      }
+      case 'show':
+        await this.showInPager(command.args)
+        return
+      case 'checkout': {
+        const paneId = this.scmPaneId()
+        if (paneId === null) return
+        await this.callScm('git.checkout', { paneId, branch: command.branch, remote: command.remote })
+        await this.refreshExplorerStatus()
+        await this.reloadDrawer(drawer)
+        return
+      }
+      case 'worktree-open':
+        this.releaseDock()
+        await this.call('worktree.open', { path: command.path, target: 'workspace' })
+        return
+      case 'worktree-remove':
+        this.askConfirm(command.confirm.title, command.confirm.detail, async () => {
+          const result = (await this.options.client.call('worktree.remove', {
+            path: command.path
+          } as never)) as WorktreeRemoveResult
+          const scm = this.panels?.scm
+          if (scm !== undefined) {
+            if (result.removed) scm.report(`removed ${command.name}`)
+            else scm.fail(result.reason ?? 'the worktree was not removed')
+          }
+          await this.reloadDrawer(drawer)
+        })
+        this.requestRender()
+        return
+      case 'action': {
+        if (command.confirm !== null) {
+          // Nothing has run yet, and nothing will if this is cancelled: the call is
+          // inside the dialog's callback, not before it.
+          this.askConfirm(command.confirm.title, command.confirm.detail, async () => {
+            await this.runDrawerAction(command.action, command.ref)
+          })
+          this.requestRender()
+          return
+        }
+        if (command.pending !== undefined) {
+          // Fetch is the one action that talks to a network. It cannot hang — `gitEnv`
+          // makes a credential prompt impossible — but it can take a second, and a
+          // panel that says nothing for a second looks like a dead keystroke.
+          panels.scm.report(command.pending)
+          this.requestRender()
+        }
+        await this.runDrawerAction(command.action, command.ref)
+        return
+      }
+    }
+  }
+
+  /** Run a drawer action, adopt the status it returns, and say what git said. */
+  private async runDrawerAction(action: GitDrawerActionId, ref: string): Promise<void> {
+    const panels = this.panels
+    const paneId = this.scmPaneId()
+    if (panels === null || paneId === null) return
+    try {
+      const result = (await this.options.client.call('git.drawerAction', {
+        paneId,
+        action,
+        ref
+      } as never)) as GitDrawerActionResult
+      if (this.panels !== panels) return
+      panels.scm.adopt(result.status)
+      panels.scm.report(result.message)
+      // Whatever just happened changed history or the index, so every open drawer is
+      // now describing the repository as it was. Re-read them, and nothing else.
+      for (const id of panels.scm.drawers.expandedIds()) {
+        panels.scm.drawers.reload(id)
+        await this.fetchDrawer(id)
+      }
+      await this.refreshExplorerStatus()
+      void this.refreshRepoSummaries(true)
+    } catch (error) {
+      if (this.panels === panels) panels.scm.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /** Re-read one drawer after something that only it can have noticed. */
+  private async reloadDrawer(id: GitDrawerId): Promise<void> {
+    const panels = this.panels
+    if (panels === null || !panels.scm.drawers.isExpanded(id)) return
+    panels.scm.drawers.reload(id)
+    await this.fetchDrawer(id)
+  }
+
+  /** `git <args>` in a pane, which is where every diff in this project is read. */
+  private async showInPager(args: readonly string[]): Promise<void> {
+    this.releaseDock()
+    await this.call('pane.split', {
+      direction: 'right',
+      focus: true,
+      command: 'git',
+      args: [...args],
+      cwd: this.panels?.scm.status?.root ?? ''
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -2267,6 +2607,9 @@ export class TuiApp {
   /** Open a file in the user's pager, at a line when there is one. See `pagerArgs`. */
   private async openInPager(file: string, cwd: string, line: number | null): Promise<void> {
     const pager = process.env['PAGER'] ?? 'less'
+    // The pager is the thing you now want to type into: `less` with no keyboard is a
+    // screenshot of a file.
+    this.releaseDock()
     await this.call('pane.split', {
       direction: 'right',
       focus: true,
@@ -2374,10 +2717,14 @@ export class TuiApp {
       }
       const actions = this.hits.actionRow
       if (actions !== null && mouse.row === actions.row) {
-        // Right half opens the menu, anything else on the row makes a workspace: on a
+        // Three targets on one row, checked in the order they are drawn: `menu` on the
+        // right, `▤ files` in the middle, and anything else makes a workspace — on a
         // row labelled `new`, that is the likelier intent for a stray click.
+        const files = actions.files
         if (mouse.column >= actions.menuStart) this.openAppMenu(mouse.column, mouse.row)
-        else await this.call('workspace.create', { focus: true })
+        else if (files !== null && mouse.column >= files.x && mouse.column < files.end) {
+          await this.togglePanel('explorer')
+        } else await this.call('workspace.create', { focus: true })
         return true
       }
       if (mouse.row === this.hits.newWorkspaceRow) {
@@ -2758,7 +3105,7 @@ export class TuiApp {
       const sidebar = this.sidebarArea()
       if (sidebar !== null) {
         if (this.panels !== null) {
-          this.panels.render(this.back, sidebar, this.palette, true)
+          this.panels.render(this.back, sidebar, this.palette, this.dockFocused)
         } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
         } else {
@@ -2769,7 +3116,8 @@ export class TuiApp {
             this.palette,
             this.hits,
             this.sidebarHoverRow(),
-            this.dockRight()
+            this.dockRight(),
+            this.repoSummaries
           )
         }
       }
@@ -2925,7 +3273,7 @@ export class TuiApp {
       ? 'PREFIX'
       : this.branches !== null
         ? BRANCH_HINT
-        : this.panels !== null
+        : this.panels !== null && this.dockFocused
           ? this.panels.hint()
       : this.status.length > 0
         ? this.status

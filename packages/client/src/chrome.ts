@@ -21,7 +21,7 @@ import {
   type Style
 } from '@leap-chorus/tui'
 import { DEFAULT_CONFIG, resolveTheme, type Config } from '@leap-chorus/core'
-import type { SessionStateSnapshot } from '@leap-chorus/protocol'
+import type { GitRepoSummary, SessionStateSnapshot } from '@leap-chorus/protocol'
 import {
   agentEntries,
   agentGlyph,
@@ -45,8 +45,19 @@ export interface HitRegions {
   tabBarRow: number
   /** The sidebar's "new workspace" row, or -1. */
   newWorkspaceRow: number
-  /** The sidebar's action row: `new` on the left, `menu` on the right. */
-  actionRow: { readonly row: number; readonly newEnd: number; readonly menuStart: number } | null
+  /**
+   * The sidebar's action row: `new` on the left, `▤ files` in the middle, `menu` right.
+   *
+   * `files` is null when the strip is too narrow to hold it, which is why it is a span
+   * rather than a pair of columns — the click handler must not guess at where it would
+   * have been.
+   */
+  actionRow: {
+    readonly row: number
+    readonly newEnd: number
+    readonly menuStart: number
+    readonly files: { readonly x: number; readonly end: number } | null
+  } | null
   /** The `«` that collapses the sidebar. */
   collapse: { readonly x: number; readonly end: number; readonly y: number } | null
   /**
@@ -206,12 +217,28 @@ export function renderSidebar(
    * as long as `x` was always 0, and became a grip on the screen's outer edge the moment
    * `[sidebar] dock = "right"` existed.
    */
-  dockRight = false
+  dockRight = false,
+  /**
+   * One git headline per workspace id, when the client has fetched them.
+   *
+   * Empty is a normal state, not a failure: the map is filled by `git.summary` after
+   * the first render, and a workspace outside a checkout is simply absent from it. A
+   * row with no entry draws no second line, so the list degrades to what it was.
+   */
+  summaries: ReadonlyMap<string, GitRepoSummary> = new Map()
 ): void {
   buffer.fill(area, ' ', palette.sidebar)
   let y = area.y
   const limit = area.y + area.height
   const width = area.width
+
+  // A section header, as in herdr-sidebar. One row, and it earns it: without it the
+  // workspace list and the agents list below run together into one list of names with
+  // a blank line in the middle.
+  if (y < limit) {
+    buffer.writeString(area.x, y, truncate('spaces', width).padEnd(width, ' '), palette.idleBorder, area.x + width)
+    y += 1
+  }
 
   for (const workspace of orderedWorkspaces(state)) {
     if (y >= limit) return
@@ -222,42 +249,75 @@ export function renderSidebar(
     // appeared to do nothing at all and the mouse looked broken.
     const rowStyle = hovered(active ? palette.sidebarActive : palette.sidebar, y === hoverRow)
     const paneCount = countPanes(state, workspace.workspaceId)
-    const label = `${workspace.number} ${workspaceTitle(workspace)}`
 
-    // The agent glyph sits between the name and the count: a workspace you are not
-    // looking at is exactly the one whose blocked agent you need to be told about.
+    // The agent glyph **leads** the row, beside the number.
+    //
+    // It used to sit on the right, between the name and the pane count, where it read
+    // as part of the numbers rather than as a property of the workspace. Leading is
+    // where every list of this shape puts a status light, and it gives the eye one
+    // column to scan instead of a ragged right edge — which matters most in the state
+    // this exists for: four workspaces down the list, one of them blocked.
     const status = workspaceAgentStatus(state, workspace.workspaceId)
     const glyph = agentGlyph(status)
     // `x` closes the workspace. Only drawn when there is more than one: closing the
     // last workspace empties the session and quits, which is `C-b q`'s job and not
     // something a stray click on a sidebar row should do.
     const closable = state.workspaceOrder.length > 1
-    const suffix = `${glyph === null ? ' ' : glyph} ${paneCount}${closable ? ' x' : ''}`
+    const suffix = ` ${paneCount}${closable ? ' x' : ''}`
+    const prefix = `${workspace.number} ${glyph === null ? ' ' : glyph} `
 
     // The suffix is pinned right, so a long workspace name truncates rather than
     // pushing the count off the edge.
-    const room = Math.max(0, width - suffix.length - 1)
-    buffer.writeString(area.x, y, truncate(label, room).padEnd(room, ' '), rowStyle, area.x + width)
+    const room = Math.max(0, width - suffix.length)
+    buffer.writeString(
+      area.x,
+      y,
+      truncate(`${prefix}${workspaceTitle(workspace)}`, room).padEnd(room, ' '),
+      rowStyle,
+      area.x + width
+    )
     if (glyph !== null) {
       // The glyph keeps the row's background but takes the state's foreground, so it
       // reads on the active row too.
       const agentStyle = palette.agent[status as string]
       buffer.writeString(
-        area.x + room,
+        area.x + `${workspace.number} `.length,
         y,
         glyph,
         agentStyle === undefined ? rowStyle : { ...rowStyle, fg: agentStyle.fg },
         area.x + width
       )
     }
-    buffer.writeString(area.x + room + 1, y, ` ${paneCount}`, rowStyle, area.x + width)
+    buffer.writeString(area.x + room, y, ` ${paneCount}`, rowStyle, area.x + width)
     if (closable) {
-      const closeX = area.x + room + 1 + ` ${paneCount}`.length
+      const closeX = area.x + room + ` ${paneCount}`.length
       buffer.writeString(closeX, y, ' x', rowStyle, area.x + width)
       hits.workspaceCloseSpans.push({ x: closeX, end: closeX + 2, y, workspaceId: workspace.workspaceId })
     }
     hits.workspaceRows.set(y, workspace.workspaceId)
     y += 1
+
+    // The branch, dimmed, under the name — the one fact about a workspace you cannot
+    // get from its title, and the reason a workspace list beats a list of directories.
+    // Only when it is known: no row is invented for a directory that is not a checkout.
+    const summary = summaries.get(workspace.workspaceId)
+    if (summary !== undefined && summary.isRepo && summary.branch.length > 0 && y < limit) {
+      const counts = !summary.hasUpstream
+        ? ''
+        : `${summary.ahead > 0 ? ` ↑${summary.ahead}` : ''}${summary.behind > 0 ? ` ↓${summary.behind}` : ''}`
+      // Indented to the name's own column, so the two rows read as one entry.
+      const line = `    ${summary.branch}${counts}${summary.dirty ? ' ●' : ''}`
+      buffer.writeString(
+        area.x,
+        y,
+        truncate(line, width).padEnd(width, ' '),
+        hovered(palette.idleBorder, y === hoverRow),
+        area.x + width
+      )
+      // The same click target as the name above it: two rows, one workspace.
+      hits.workspaceRows.set(y, workspace.workspaceId)
+      y += 1
+    }
 
     if (!active) continue
     for (const tab of tabsOf(state, workspace.workspaceId)) {
@@ -279,6 +339,12 @@ export function renderSidebar(
   // One action row, `new` left and `menu` right, following herdr. Two separate rows
   // cost two lines of a 22-column strip to say what fits on one, and the pair reads
   // as a toolbar rather than as two more list entries you might have missed.
+  //
+  // Between them sits `▤ files`, which opens the docked file sidebar. It is there
+  // because the dock had no visible way in at all: `C-b e` opens it and nothing on
+  // screen says so, which makes a whole half of the program invisible to anyone who
+  // has not read the keys. The glyph degrades to `▤` alone before it is dropped, so a
+  // narrow strip loses the word rather than the button.
   if (y < limit) {
     const row = hovered(palette.sidebar, y === hoverRow)
     buffer.writeString(area.x, y, ' '.repeat(width), row, area.x + width)
@@ -286,7 +352,18 @@ export function renderSidebar(
     const menu = 'menu '
     const menuStart = area.x + Math.max(0, width - menu.length)
     buffer.writeString(menuStart, y, menu, row, area.x + width)
-    hits.actionRow = { row: y, newEnd: area.x + 4, menuStart }
+
+    // Centred in what is left between `new` and `menu`, and only if it fits whole:
+    // a half-drawn label would be a target whose edge nobody can find.
+    const gap = { start: area.x + 5, end: menuStart - 1 }
+    const label = gap.end - gap.start >= FILES_LABEL.length ? FILES_LABEL : FILES_GLYPH
+    let files: { x: number; end: number } | null = null
+    if (gap.end - gap.start >= label.length) {
+      const x = gap.start + Math.floor((gap.end - gap.start - label.length) / 2)
+      buffer.writeString(x, y, label, row, area.x + width)
+      files = { x, end: x + label.length }
+    }
+    hits.actionRow = { row: y, newEnd: area.x + 4, menuStart, files }
     // Kept so a click anywhere else on the row still makes a workspace, which is the
     // more likely intent on a row whose left half says `new`.
     hits.newWorkspaceRow = y
@@ -318,6 +395,18 @@ export function renderSidebar(
   }
 }
 
+/**
+ * The action row's file-sidebar button, and its narrow form.
+ *
+ * `▤` is Geometric Shapes, the same block as the pane buttons this file already draws,
+ * so it is measured the same way by `stringWidth` and by every terminal that agrees
+ * with it. Not a Nerd Font glyph, for `icons.ts`'s reason: a Private Use Area code
+ * point has no assigned width, and one column of disagreement moves every hit region
+ * on the row.
+ */
+const FILES_GLYPH = '▤'
+const FILES_LABEL = '▤ files'
+
 /** A grip on a vertical edge, and on a horizontal one. */
 export const GRIP_VERTICAL = '⋮'
 export const GRIP_HORIZONTAL = '⋯'
@@ -345,6 +434,12 @@ export function renderDividerGrips(
       hits.grips.push({ x, y: border.pos, kind: 'divider', path: border.path, direction: 'vertical' })
     }
   }
+}
+
+/** A workspace's display name, for the agents list's second line. */
+function workspaceNameOf(state: SessionStateSnapshot, workspaceId: string, number: number): string {
+  const workspace = state.workspaces.find((entry) => entry.workspaceId === workspaceId)
+  return workspace === undefined ? `workspace ${number}` : workspaceTitle(workspace)
 }
 
 /**
@@ -383,10 +478,22 @@ function renderAgentSection(
     if (y >= limit) return
     const glyph = agentGlyph(entry.status) ?? '?'
     const rowStyle = hovered(palette.sidebar, y === hoverRow)
-    const label = ` ${glyph} ${entry.agent}`
-    const badge = `${entry.workspaceNumber}`
-    const room = Math.max(0, width - badge.length - 1)
+
+    // Line one is **what is running**, line two is **how it is going and where**.
+    // It used to be the tool on one line and the pane title on the other, which put
+    // the word `claude` four times down a list of four agents and made the one thing
+    // that distinguishes them — their task — the dim half. A pane whose title is still
+    // the tool's own name falls back to the tool, so nothing renders as `claude ·
+    // claude`.
+    const task = entry.title.trim()
+    const named = task.length > 0 && task.toLowerCase() !== entry.agent.toLowerCase()
+    const label = ` ${glyph} ${named ? task : entry.agent}`
+    const tool = named ? ` ${entry.agent}` : ''
+    const room = Math.max(0, width - tool.length)
     buffer.writeString(area.x, y, truncate(label, room).padEnd(room, ' '), rowStyle, area.x + width)
+    if (tool.length > 0) {
+      buffer.writeString(area.x + room, y, tool, hovered(palette.idleBorder, y === hoverRow), area.x + width)
+    }
 
     // The glyph carries the state's colour; the rest of the row does not, so a list of
     // eight agents reads as one list with one thing standing out.
@@ -394,13 +501,19 @@ function renderAgentSection(
     if (agentStyle !== undefined) {
       buffer.writeString(area.x + 1, y, glyph, { ...rowStyle, fg: agentStyle.fg }, area.x + width)
     }
-    buffer.writeString(area.x + room, y, ` ${badge}`, rowStyle, area.x + width)
     hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
     y += 1
 
     if (y >= limit) return
-    const subtitle = `   ${entry.title}`
-    buffer.writeString(area.x, y, truncate(subtitle, width).padEnd(width, ' '), hovered(palette.idleBorder, y === hoverRow), area.x + width)
+    // `idle · acme-app`: the state in its own colour, then the workspace it is in.
+    // The workspace by *name*, not by number — a number is a keystroke, and this line
+    // is answering "which project is that".
+    const place = workspaceNameOf(state, entry.workspaceId, entry.workspaceNumber)
+    const dim = hovered(palette.idleBorder, y === hoverRow)
+    buffer.writeString(area.x, y, ' '.repeat(width), dim, area.x + width)
+    buffer.writeString(area.x, y, truncate(`   ${entry.status}`, width), agentStyle ?? dim, area.x + width)
+    const after = area.x + Math.min(width, 3 + entry.status.length)
+    buffer.writeString(after, y, truncate(` · ${place}`, Math.max(0, area.x + width - after)), dim, area.x + width)
     hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
     y += 1
   }

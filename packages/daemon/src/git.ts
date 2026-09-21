@@ -19,7 +19,7 @@
 import { existsSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join, sep } from 'node:path'
-import { ErrorCodes, type GitBranch } from '@leap-chorus/protocol'
+import { ErrorCodes, type GitBranch, type GitRepoSummary } from '@leap-chorus/protocol'
 import { RequestError } from './rpc/params.js'
 import { canonicalPath, gitBufferOverflowMessage, runGit, type GitRunner } from './worktree.js'
 
@@ -212,6 +212,24 @@ export function pathsUnder(entries: readonly GitFileEntry[], prefix: string | un
 export function dropNested(paths: readonly string[], nested: readonly string[]): string[] {
   return paths.filter((path) => !nested.some((root) => under(path, root)))
 }
+
+/**
+ * The one query behind both the branch picker and the Branches drawer.
+ *
+ * PHASE-11 asks for this to be a decision rather than an accident. herdr-sidebar's
+ * drawer runs `branch -a --sort=-committerdate --format='%(HEAD) %(refname:short)'`,
+ * which is display text that would have to be un-rendered back into these same three
+ * fields — and which cannot say whether a ref is *symbolic*, so `origin/HEAD` would
+ * appear as a row whose Checkout entry detaches HEAD at a branch nobody picked. So
+ * there is one query, read by two callers, and the drawer is the display-only one.
+ */
+export const BRANCH_REF_ARGS: readonly string[] = [
+  'for-each-ref',
+  '--sort=-committerdate',
+  '--format=%(HEAD)%00%(refname:short)%00%(refname)%00%(symref)',
+  'refs/heads',
+  'refs/remotes'
+]
 
 /**
  * Parse `for-each-ref --format=%(HEAD)%00%(refname:short)%00%(refname)%00%(symref)`.
@@ -592,6 +610,53 @@ export class GitService {
   }
 
   /**
+   * The header line of several repositories at once, for the sidebar's workspace list.
+   *
+   * `--untracked-files=no` is the whole difference from `status`, and it is the reason
+   * this is cheap enough to run per workspace: the expensive part of a status is
+   * walking the tree for untracked files, and a sidebar row does not report them. What
+   * is left is the branch, the ahead/behind counts, and whether anything tracked has
+   * changed — which is the dot beside the name.
+   *
+   * A directory that is not a checkout comes back `isRepo: false` rather than throwing:
+   * a workspace pointed at `~` is a normal thing for a multiplexer to hold, and one bad
+   * row must not fail the other five.
+   */
+  async summary(paths: readonly string[]): Promise<GitRepoSummary[]> {
+    return Promise.all(paths.map((path) => this.summaryOf(path)))
+  }
+
+  private async summaryOf(path: string): Promise<GitRepoSummary> {
+    const empty: GitRepoSummary = {
+      path,
+      isRepo: false,
+      branch: '',
+      ahead: 0,
+      behind: 0,
+      hasUpstream: false,
+      dirty: false
+    }
+    if (!existsSync(path)) return empty
+    const result = await this.git(
+      ['status', '--porcelain', '-z', '--branch', '--untracked-files=no'],
+      path
+    )
+    if (result.code !== 0) return empty
+    // The same parser the panel uses, so the branch line in the sidebar and the branch
+    // line in Source Control can never disagree about what git said.
+    const status = parseStatus(result.stdout, path)
+    return {
+      path,
+      isRepo: true,
+      branch: status.branch,
+      ahead: status.ahead,
+      behind: status.behind,
+      hasUpstream: status.hasUpstream,
+      dirty: status.staged.length > 0 || status.unstaged.length > 0
+    }
+  }
+
+  /**
    * Local and remote-tracking branches, for the picker.
    *
    * `for-each-ref` rather than `branch -a`, because it can print the fields separated
@@ -600,16 +665,7 @@ export class GitService {
    */
   async branches(cwd: string): Promise<{ root: string; branches: GitBranch[] }> {
     const root = await this.repoRoot(cwd)
-    const result = await this.git(
-      [
-        'for-each-ref',
-        '--sort=-committerdate',
-        '--format=%(HEAD)%00%(refname:short)%00%(refname)%00%(symref)',
-        'refs/heads',
-        'refs/remotes'
-      ],
-      root
-    )
+    const result = await this.git([...BRANCH_REF_ARGS], root)
     if (result.code !== 0) {
       throw new RequestError(ErrorCodes.gitFailed, failureMessage(result, 'git for-each-ref'))
     }

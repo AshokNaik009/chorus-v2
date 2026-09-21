@@ -21,8 +21,9 @@
  */
 
 import { ScreenBuffer, truncate, type Rect } from '@leap-chorus/tui'
-import type { GitFileEntry, GitStatusResult } from '@leap-chorus/protocol'
+import type { GitDrawerId, GitDrawerRow, GitFileEntry, GitStatusResult } from '@leap-chorus/protocol'
 import { wrapWords, type Palette } from './chrome.js'
+import { DrawersPanel, fitRowText } from './drawers.js'
 import { ScrollView, needsScrollbar, renderScrollbar } from './scrollview.js'
 
 /** Narrower than this and a path is a column of truncation, not a filename. */
@@ -50,16 +51,45 @@ export type ScmOutcome =
    * fallback is the interesting half.
    */
   | { readonly kind: 'suggest' }
+  /**
+   * A drawer header was activated. The panel has already flipped it; `fetch` says
+   * whether the app has to go and get its rows.
+   */
+  | { readonly kind: 'drawer'; readonly id: GitDrawerId; readonly fetch: boolean }
+  /** A drawer row's context menu — the only place a drawer action is reachable. */
+  | { readonly kind: 'drawerMenu'; readonly drawer: GitDrawerId; readonly row: GitDrawerRow }
 
-/** A row in the flattened list: a section header, or a file on one side of the index. */
+/**
+ * A row in the flattened list.
+ *
+ * Five kinds, three of which the cursor can rest on. `header` is a label for the two
+ * change sections and `drawer-note` is a drawer's reason for having no rows; neither
+ * is a destination, and `move` steps over both.
+ */
 interface Row {
-  readonly kind: 'header' | 'file'
+  readonly kind: 'header' | 'file' | 'drawer' | 'drawer-row' | 'drawer-note'
   readonly text: string
   readonly entry?: GitFileEntry
   readonly staged?: boolean
+  readonly drawer?: GitDrawerId
+  readonly row?: GitDrawerRow
+}
+
+/** Which rows the cursor may land on. */
+function selectable(row: Row | undefined): boolean {
+  return row !== undefined && (row.kind === 'file' || row.kind === 'drawer' || row.kind === 'drawer-row')
 }
 
 export class ScmPanel {
+  /**
+   * The eight drawers, under the changes list.
+   *
+   * A field rather than a second panel in `SidebarPanels`: they are part of the Source
+   * Control view — one cursor, one scroll offset, one `r` — and hoisting them would
+   * make a drawer row and a changed file two different kinds of selection to keep in
+   * step. The app reaches them through here for fetching.
+   */
+  readonly drawers = new DrawersPanel()
   status: GitStatusResult | null = null
   /** Why the last call failed, shown in place of the list. */
   error: string | null = null
@@ -112,7 +142,14 @@ export class ScmPanel {
     this.error = null
   }
 
-  /** The flattened list, headers included, in display order. */
+  /**
+   * The flattened list — the two change sections, then the eight drawers.
+   *
+   * One list, because there is one cursor and one viewport. The drawers are appended
+   * rather than drawn in their own rectangle for the same reason: a changes list that
+   * scrolled separately from the drawers under it would need two scrollbars and two
+   * ideas of where the keyboard is.
+   */
   rows(): Row[] {
     const status = this.status
     if (status === null) return []
@@ -129,6 +166,16 @@ export class ScmPanel {
         rows.push({ kind: 'file', text: entry.path, entry, staged: false })
       }
     }
+    // With drawers under it, an empty changes list is no longer an empty *panel*, so
+    // "no changes" is a row in the list rather than a message drawn in place of it.
+    if (rows.length === 0) rows.push({ kind: 'header', text: 'no changes' })
+    for (const line of this.drawers.lines()) {
+      rows.push(
+        line.kind === 'drawer-row'
+          ? { kind: 'drawer-row', text: line.text, drawer: line.id, row: line.row }
+          : { kind: line.kind, text: line.text, drawer: line.id }
+      )
+    }
     return rows
   }
 
@@ -136,7 +183,7 @@ export class ScmPanel {
     return this.rows()[this.cursor] ?? null
   }
 
-  /** Move by `delta`, skipping headers: they are labels, not destinations. */
+  /** Move by `delta`, skipping labels: a header and a drawer's reason are not destinations. */
   private move(delta: number): void {
     const rows = this.rows()
     if (rows.length === 0) return
@@ -144,7 +191,7 @@ export class ScmPanel {
     for (let step = 0; step < rows.length; step++) {
       next += delta
       if (next < 0 || next >= rows.length) return
-      if (rows[next]?.kind === 'file') {
+      if (selectable(rows[next])) {
         this.cursor = next
         return
       }
@@ -160,8 +207,8 @@ export class ScmPanel {
     if (this.cursor >= rows.length) this.cursor = rows.length - 1
     if (this.cursor < 0) this.cursor = 0
     // Never rest on a header, including on first load where the cursor starts at 0.
-    if (rows[this.cursor]?.kind !== 'file') {
-      const first = rows.findIndex((row) => row.kind === 'file')
+    if (!selectable(rows[this.cursor])) {
+      const first = rows.findIndex((row) => selectable(row))
       this.cursor = first === -1 ? 0 : first
     }
   }
@@ -177,8 +224,13 @@ export class ScmPanel {
     if (row === area.y && this.status !== null) return { kind: 'branches' }
     const rows = this.rows()
     const index = this.view.indexAt(row, area.y + LIST_TOP, rows.length, this.listHeight(area))
-    if (index === null || rows[index]?.kind !== 'file') return { kind: 'none' }
+    if (index === null || !selectable(rows[index])) return { kind: 'none' }
     this.cursor = index
+    // A click on a drawer header opens it, which is the gesture a `▸` invites. A click
+    // on a file row still only selects: staging is `⏎`, and phase 10 settled that a
+    // click is the lighter gesture everywhere in the dock.
+    const hit = rows[index] as Row
+    if (hit.kind === 'drawer') return this.toggleDrawer(hit)
     return { kind: 'none' }
   }
 
@@ -222,7 +274,19 @@ export class ScmPanel {
       this.move(1)
       return { kind: 'none' }
     }
-    if (name === 'enter') return this.toggleSelected()
+    if (name === 'enter') return this.activateSelected()
+    // `→` opens a drawer and `←` closes it, which is what an arrow means beside a `▸`.
+    if (name === 'right' || name === 'left') {
+      const row = this.selected()
+      if (row?.kind !== 'drawer' || row.drawer === undefined) return { kind: 'none' }
+      const id = row.drawer
+      if (name === 'right') {
+        return { kind: 'drawer', id, fetch: this.drawers.expand(id) }
+      }
+      this.drawers.collapse(id)
+      this.clampCursor()
+      return { kind: 'drawer', id, fetch: false }
+    }
 
     switch (char) {
       case 'k':
@@ -262,17 +326,48 @@ export class ScmPanel {
         if (row?.entry === undefined) return { kind: 'none' }
         return { kind: 'diff', path: row.entry.path, staged: row.staged === true }
       }
+      case 'm':
+        // herdr-sidebar's row menu. Only drawer rows have one here: the changes list's
+        // own menu is phase 9's question and every one of its actions is a key already.
+        return this.menuForSelected()
       default:
         return { kind: 'none' }
     }
   }
 
-  private toggleSelected(): ScmOutcome {
+  /**
+   * `⏎`, whatever is under the cursor.
+   *
+   * A file is staged or unstaged, a drawer opens, and a drawer *row* opens its menu.
+   * The menu rather than a default action: every drawer row's primary entry is
+   * something different — Show Changes for a commit, Checkout for a branch — and a key
+   * that means four things depending on which section you scrolled into is a key that
+   * cherry-picks a commit when you meant to look at it.
+   */
+  private activateSelected(): ScmOutcome {
     const row = this.selected()
-    if (row?.entry === undefined) return { kind: 'none' }
+    if (row === null) return { kind: 'none' }
+    if (row.kind === 'drawer') return this.toggleDrawer(row)
+    if (row.kind === 'drawer-row') return this.menuForSelected()
+    if (row.entry === undefined) return { kind: 'none' }
     return row.staged === true
       ? { kind: 'unstage', paths: [row.entry.path] }
       : { kind: 'stage', paths: [row.entry.path] }
+  }
+
+  private toggleDrawer(row: Row): ScmOutcome {
+    const id = row.drawer
+    if (id === undefined) return { kind: 'none' }
+    const fetch = this.drawers.toggle(id)
+    // Collapsing can leave the cursor pointing at a row that no longer exists.
+    this.clampCursor()
+    return { kind: 'drawer', id, fetch }
+  }
+
+  private menuForSelected(): ScmOutcome {
+    const row = this.selected()
+    if (row?.kind !== 'drawer-row' || row.row === undefined || row.drawer === undefined) return { kind: 'none' }
+    return { kind: 'drawerMenu', drawer: row.drawer, row: row.row }
   }
 
   /**
@@ -354,10 +449,7 @@ export function renderScmPanel(
   }
 
   const rows = panel.rows()
-  if (rows.length === 0) {
-    buffer.writeString(area.x, area.y + LIST_TOP, truncate('no changes', area.width), palette.sidebar, right)
-    return
-  }
+  if (rows.length === 0) return
 
   const selected = panel.selected()
   const height = Math.max(0, area.height - LIST_TOP)
@@ -371,6 +463,27 @@ export function renderScmPanel(
   for (const row of rows.slice(offset, offset + height)) {
     if (row.kind === 'header') {
       buffer.writeString(area.x, y, truncate(row.text, room), palette.paneTitle, right)
+      y += 1
+      continue
+    }
+    if (row.kind === 'drawer' || row.kind === 'drawer-row' || row.kind === 'drawer-note') {
+      const isSelected = row === selected
+      const rowStyle =
+        isSelected && focused
+          ? palette.sidebarActive
+          : row.kind === 'drawer'
+            ? palette.paneTitle
+            : row.kind === 'drawer-note'
+              ? (palette.agent['idle'] ?? palette.sidebar)
+              : palette.sidebar
+      buffer.fill({ x: area.x, y, width: room, height: 1 }, ' ', rowStyle)
+      // A drawer's rows are indented under its header, which is the only thing saying
+      // a commit belongs to Commits rather than to the list above it.
+      const indent = row.kind === 'drawer' ? '' : '  '
+      // A drawer row is fitted by `fitRowText`, not truncated: a remote clipped from
+      // the right loses the `owner/repo` that says which remote it is. See `drawers.ts`.
+      const text = row.row === undefined ? row.text : fitRowText(row.row, Math.max(0, room - indent.length))
+      buffer.writeString(area.x, y, truncate(`${indent}${text}`, room), rowStyle, area.x + room)
       y += 1
       continue
     }
@@ -401,4 +514,4 @@ export function renderScmPanel(
 
 /** The one-line hint for the status bar while the panel has the keyboard. */
 export const SCM_HINT =
-  '↑↓ move · ⏎ stage/unstage · a/u all · c commit · A draft · d discard · o diff · b branch · S sync · 1 files · 2 search · esc close'
+  '↑↓ move · ⏎ stage/open · m menu · →← drawer · a/u all · c commit · A draft · d discard · o diff · b branch · S sync · r refresh · esc close'

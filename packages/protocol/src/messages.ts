@@ -74,9 +74,15 @@ import type {
   GitBranchesResult,
   GitCheckoutParams,
   GitCommitParams,
+  GitDrawerActionParams,
+  GitDrawerActionResult,
+  GitDrawerParams,
+  GitDrawerResult,
   GitPathsParams,
   GitStatusParams,
   GitStatusResult,
+  GitSummaryParams,
+  GitSummaryResult,
   GitSuggestParams,
   GitSuggestResult,
   GitSyncResult,
@@ -443,6 +449,11 @@ export interface AgentMethodMap {
   'git.checkout': { params: GitCheckoutParams; result: GitStatusResult }
   'git.sync': { params: GitStatusParams; result: GitSyncResult }
   'git.suggest': { params: GitSuggestParams; result: GitSuggestResult }
+  /** One drawer's rows, fetched when it is opened. See PHASE-11. */
+  /** One header line per directory, for the workspace list. */
+  'git.summary': { params: GitSummaryParams; result: GitSummaryResult }
+  'git.drawer': { params: GitDrawerParams; result: GitDrawerResult }
+  'git.drawerAction': { params: GitDrawerActionParams; result: GitDrawerActionResult }
 
   'worktree.list': { params: WorktreeListParams; result: WorktreeListResult }
   'worktree.create': { params: WorktreeCreateParams; result: WorktreeCreateResult }
@@ -478,6 +489,9 @@ export const AGENT_METHODS = [
   'git.checkout',
   'git.sync',
   'git.suggest',
+  'git.summary',
+  'git.drawer',
+  'git.drawerAction',
   'worktree.list',
   'worktree.create',
   'worktree.open',
