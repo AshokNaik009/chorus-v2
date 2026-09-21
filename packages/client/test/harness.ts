@@ -105,8 +105,9 @@ export class TuiHarness {
     const dataRoot = mkdtempSync(join(tmpdir(), 'hrt-'))
     const paths = resolveDaemonPaths({ dataRoot })
     const configEnv: Record<string, string> = {}
+    let configPath: string | null = null
     if (options.config !== undefined) {
-      const configPath = join(dataRoot, 'config.toml')
+      configPath = join(dataRoot, 'config.toml')
       writeFileSync(configPath, options.config)
       configEnv['LEAP_CHORUS_CONFIG'] = configPath
     }
@@ -136,6 +137,7 @@ export class TuiHarness {
 
     const emulator = new PaneEmulator({ cols, rows, scrollback: 200 })
     const harness = new TuiHarness(term, dataRoot, paths, daemonPid, emulator, cols, rows)
+    harness.configPath = configPath
 
     term.onData((chunk) => {
       harness.raw += chunk
@@ -162,6 +164,21 @@ export class TuiHarness {
   /** Where this harness's daemon keeps its state, for driving the CLI against it. */
   get root(): string {
     return this.dataRoot
+  }
+
+  /**
+   * The config file this harness wrote, or null when it was started without one.
+   *
+   * Public so a test can rewrite it and then ask the client to reload — which is what
+   * `C-b R` does, and the only way to check that a setting takes effect *without the
+   * panel closing*.
+   */
+  configPath: string | null = null
+
+  /** Replace the config file's contents. The client only sees it on a reload. */
+  rewriteConfig(source: string): void {
+    if (this.configPath === null) throw new Error('this harness was started without a config')
+    writeFileSync(this.configPath, source)
   }
 
   get size(): { cols: number; rows: number } {

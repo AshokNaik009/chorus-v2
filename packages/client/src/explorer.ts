@@ -11,18 +11,27 @@
  * few dozen someone opened. What is drawn is a flat list built from the expanded
  * nodes, so scrolling and cursor movement are index arithmetic rather than a walk.
  *
- * ## Glyphs are ASCII
+ * ## Glyphs are ASCII unless asked
  *
- * Nerd Font icons would look better and cost correctness: they live in the Private Use
- * Area, `codePointWidth` measures them as one column, and a terminal or font that
- * disagrees shifts every column after them — which is the bug `pane-buttons = ascii`
- * already exists to escape. Working everywhere comes first; an icon theme can be added
- * behind a setting later.
+ * Nerd Font icons look better and cost correctness: they live in the Private Use Area,
+ * `codePointWidth` measures them as one column, and a terminal or font that disagrees
+ * shifts every column after them — which is the bug `pane-buttons = ascii` already
+ * exists to escape. Phase 9 added the setting the previous note promised: `[sidebar]
+ * icons` picks one of three themes, `ascii` is the default and draws no icon column at
+ * all, and `icons.ts` holds the reason and the width check.
+ *
+ * ## Everything drawn is measured in columns, not characters
+ *
+ * Every string this file puts on screen goes through `truncate`, which counts display
+ * columns. A `slice` counts UTF-16 code units, and the two disagree about every CJK
+ * filename, every emoji and every combining mark — by a factor of two in the direction
+ * that silently loses half a row.
  */
 
-import { ScreenBuffer, type Rect } from '@leap-chorus/tui'
+import { ScreenBuffer, truncate, type Rect } from '@leap-chorus/tui'
 import type { FsEntry, GitStatusResult } from '@leap-chorus/protocol'
 import { wrapWords, type Palette } from './chrome.js'
+import { ASCII_THEME, iconFor, type IconTheme } from './icons.js'
 import { ScrollView, needsScrollbar, renderScrollbar } from './scrollview.js'
 
 export interface TreeNode {
@@ -50,11 +59,30 @@ export type ExplorerOutcome =
   | { readonly kind: 'expand'; readonly path: string }
   | { readonly kind: 'open'; readonly path: string }
   /**
+   * Show this file in the dock's preview, and open nothing.
+   *
+   * Distinct from `open` because a click and `⏎` are not the same request. `⏎` is
+   * "open this", and `[sidebar] preview` decides whether that means the dock or a
+   * `$PAGER` pane. A *click* is a glance — a mouse user clicking down a tree to see
+   * what is in each file must not be spawning a pane per file, which is exactly what
+   * happens when a click is treated as `⏎` with the setting off.
+   */
+  | { readonly kind: 'preview'; readonly path: string }
+  /**
    * Stage this path. A directory stages the files beneath it — the daemon enumerates
    * them rather than handing the directory to `git add`, which is what keeps a nested
    * repository from being recorded as a gitlink. See `git.ts`.
    */
   | { readonly kind: 'stage'; readonly path: string }
+  /**
+   * Open the row menu for this path.
+   *
+   * herdr-sidebar's `m`, and the `ContextMenu` widget it needs already existed in
+   * `prompt.ts` — this row was an orphan in `PARITY.md` only because nothing had
+   * connected the two. The panel holds no menu state: it names the row and the app
+   * builds the menu, the same split every other action here follows.
+   */
+  | { readonly kind: 'menu'; readonly path: string; readonly isDir: boolean }
 
 /**
  * Keep the old node wherever the new listing has the same path and kind.
@@ -91,6 +119,14 @@ export class ExplorerPanel {
   error: string | null = null
   status: GitStatusResult | null = null
   showHidden = false
+  /**
+   * The glyph set, handed down by the container from `[sidebar] icons`.
+   *
+   * `ascii` — which draws no icon column at all — until told otherwise, so the tree is
+   * byte-identical to what phases 7 and 8 shipped unless somebody asked for more. See
+   * `icons.ts` for why that default is about column widths and not about taste.
+   */
+  icons: IconTheme = ASCII_THEME
   private cursor = 0
   private readonly view = new ScrollView()
 
@@ -192,6 +228,10 @@ export class ExplorerPanel {
         const node = this.selected()
         return node === null ? { kind: 'none' } : { kind: 'stage', path: node.path }
       }
+      case 'm': {
+        const node = this.selected()
+        return node === null ? { kind: 'none' } : { kind: 'menu', path: node.path, isDir: node.kind === 'dir' }
+      }
       case '.':
         this.showHidden = !this.showHidden
         this.clampCursor()
@@ -202,7 +242,7 @@ export class ExplorerPanel {
   }
 
   /** Enter on a directory expands or folds it; on a file it opens it. */
-  private activate(): ExplorerOutcome {
+  activate(): ExplorerOutcome {
     const node = this.selected()
     if (node === null) return { kind: 'none' }
     if (node.kind !== 'dir') return { kind: 'open', path: node.path }
@@ -240,12 +280,27 @@ export class ExplorerPanel {
     return { kind: 'none' }
   }
 
-  /** Put the cursor on a clicked row. Returns whether it landed on one. */
-  clickRow(screenRow: number, area: Rect): boolean {
+  /**
+   * Put the cursor on a clicked row, then fold a directory or glance at a file.
+   *
+   * A click used to only move the cursor, which made a folder look inert: you clicked
+   * it, the row highlighted, and nothing opened. Every file tree a person has used —
+   * herdr-sidebar included — folds a directory on a single click.
+   *
+   * A file is deliberately **not** treated as `⏎`. That was tried and was worse: with
+   * `[sidebar] preview` off, `⏎` hands the file to `$PAGER` in a new pane, so clicking
+   * down a tree to see what is in each file left a pane behind per click — and the
+   * keyboard stays with the dock, so none of those panes could even be scrolled. A
+   * click previews in the dock and opens nothing.
+   */
+  clickRow(screenRow: number, area: Rect): ExplorerOutcome {
     const index = this.view.indexAt(screenRow, area.y + LIST_TOP, this.rows().length, area.height - LIST_TOP)
-    if (index === null) return false
+    if (index === null) return { kind: 'none' }
     this.cursor = index
-    return true
+    const node = this.selected()
+    if (node === null) return { kind: 'none' }
+    if (node.kind !== 'dir') return { kind: 'preview', path: node.path }
+    return this.activate()
   }
 
   /** Scroll without moving the cursor. The next keystroke pulls the view back to it. */
@@ -260,16 +315,54 @@ export class ExplorerPanel {
    * is something under here without making you open every folder to find it.
    */
   decoration(path: string, kind: TreeNode['kind']): string | null {
+    const index = this.decorations()
+    if (index === null) return null
+    if (kind === 'dir') return index.dirs.has(path) ? '·' : null
+    return index.files.get(path) ?? null
+  }
+
+  /**
+   * The status, turned inside out into two lookups, once per status rather than per row.
+   *
+   * This used to be three linear scans *per row, per frame*, one of them spreading both
+   * sides of the status into a fresh array to do it. A tree of forty visible rows over a
+   * status of two hundred changes did twenty-four thousand string comparisons and forty
+   * array allocations every time the dock repainted — and the dock repaints on every
+   * keystroke. Building the index once per status makes it two hash lookups per row.
+   *
+   * Cached against the status *object*, not a copy of it: `adopt` and the app both
+   * replace `status` wholesale, so identity is exactly the right invalidation signal and
+   * there is no second thing to remember to update.
+   */
+  private decorationCache: {
+    readonly status: GitStatusResult
+    readonly files: Map<string, string>
+    readonly dirs: Set<string>
+  } | null = null
+
+  private decorations(): { files: Map<string, string>; dirs: Set<string> } | null {
     const status = this.status
     if (status === null) return null
-    if (kind === 'dir') {
-      const prefix = `${path}/`
-      const touched = [...status.staged, ...status.unstaged].some((entry) => entry.path.startsWith(prefix))
-      return touched ? '·' : null
+    const cached = this.decorationCache
+    if (cached !== null && cached.status === status) return cached
+    const files = new Map<string, string>()
+    const dirs = new Set<string>()
+    // Staged first, then unstaged, so the unstaged letter wins where a path is on both
+    // sides — which is what the old `unstaged ?? staged` ordering said.
+    for (const side of [status.staged, status.unstaged]) {
+      for (const entry of side) {
+        files.set(entry.path, entry.letter)
+        // Every ancestor directory of a touched path is itself touched. Walking up once
+        // per change is what replaces the per-directory `startsWith` scan.
+        let slash = entry.path.indexOf('/')
+        while (slash !== -1) {
+          dirs.add(entry.path.slice(0, slash))
+          slash = entry.path.indexOf('/', slash + 1)
+        }
+      }
     }
-    const staged = status.staged.find((entry) => entry.path === path)
-    const unstaged = status.unstaged.find((entry) => entry.path === path)
-    return unstaged?.letter ?? staged?.letter ?? null
+    this.decorationCache = { status, files, dirs }
+    return this.decorationCache
   }
 
   renderInto(buffer: ScreenBuffer, area: Rect, palette: Palette): void {
@@ -278,7 +371,7 @@ export class ExplorerPanel {
     buffer.writeString(
       area.x,
       area.y,
-      clip(this.root === '' ? 'explorer' : basename(this.root), area.width),
+      truncate(this.root === '' ? 'explorer' : basename(this.root), area.width),
       palette.sidebarActive,
       right
     )
@@ -296,11 +389,11 @@ export class ExplorerPanel {
     }
     const rows = this.rows()
     if (this.roots === null) {
-      buffer.writeString(area.x, area.y + LIST_TOP, clip('loading…', area.width), palette.sidebar, right)
+      buffer.writeString(area.x, area.y + LIST_TOP, truncate('loading…', area.width), palette.sidebar, right)
       return
     }
     if (rows.length === 0) {
-      buffer.writeString(area.x, area.y + LIST_TOP, clip('empty', area.width), palette.sidebar, right)
+      buffer.writeString(area.x, area.y + LIST_TOP, truncate('empty', area.width), palette.sidebar, right)
       return
     }
 
@@ -317,11 +410,24 @@ export class ExplorerPanel {
       // so names line up whatever a row happens to be.
       const marker = row.node.kind !== 'dir' ? '  ' : row.node.loading ? '· ' : row.node.expanded ? 'v ' : '> '
       const indent = '  '.repeat(row.depth)
+      const icon = iconFor(this.icons, row.node.name, row.node.kind, row.node.expanded)
       const name = row.node.kind === 'dir' ? `${row.node.name}/` : row.node.name
       const letter = this.decoration(row.node.path, row.node.kind)
       // The letter is pinned to the right edge, so the eye reads one column of them.
       const space = room - (letter === null ? 0 : 2)
-      buffer.writeString(area.x, y, clip(`${indent}${marker}${name}`, space), rowStyle, right)
+      // `truncate`, not a `slice`: this used to clip by **character count** while every
+      // other panel in the dock measured columns, so a CJK filename was cut at half the
+      // width it had been given and the row ended in a blank column with no `…` to say
+      // anything had been dropped. The limit passed to `writeString` is the reserved
+      // width too, not the dock's right edge, so a wide glyph can never be drawn into
+      // the column the status letter is about to take.
+      buffer.writeString(
+        area.x,
+        y,
+        truncate(`${indent}${marker}${icon}${name}`, Math.max(0, space)),
+        rowStyle,
+        area.x + Math.max(0, space)
+      )
       if (letter !== null) {
         buffer.writeString(
           area.x + room - 1,
@@ -353,10 +459,6 @@ function basename(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-function clip(text: string, width: number): string {
-  return text.length <= width ? text : text.slice(0, Math.max(0, width))
-}
-
 function letterStyle(letter: string, palette: Palette) {
   if (letter === '!' || letter === 'D') return palette.agent['blocked'] ?? palette.sidebar
   if (letter === 'U' || letter === 'A') return palette.agent['done'] ?? palette.sidebar
@@ -364,4 +466,4 @@ function letterStyle(letter: string, palette: Palette) {
 }
 
 export const EXPLORER_HINT =
-  '↑↓ move · ⏎ open · h/l fold · s stage · . hidden · r refresh · 2 source control · esc close'
+  '↑↓ move · ⏎ open · h/l fold · s stage · m menu · . hidden · r refresh · ^p quick open · 2 search · 3 git · esc close'

@@ -130,13 +130,16 @@ describe('the file explorer', () => {
     expect(await tui.screen()).toContain('app.ts')
   })
 
-  it('switches to source control with 2 and back with 1', async () => {
+  it('switches through the activity bar with 1, 2 and 3', async () => {
     const root = makeRepo()
     writeFileSync(join(root, 'src/app.ts'), 'edited\n')
     const tui = await openExplorer(root)
     await tui.waitForText('src/')
-    tui.write('2')
+    // VS Code's order, which is what the activity bar shows: files, search, git.
+    tui.write('3')
     await tui.waitForText('Changes (1)')
+    tui.write('2')
+    await tui.waitForText('type a query')
     tui.write('1')
     await tui.waitForText('src/')
   })

@@ -67,6 +67,10 @@ shared-mutex concurrency model that has no TypeScript equivalent.
 | Own cell-buffer renderer, not Ink/OpenTUI | Ink's refresh rate is locked to 30fps and it rebuilds the whole output on every state change. herdr's entire ratatui surface is **24 unique identifiers**; this layer is small. See `phases/archive/PHASE-2.md` for the full list and the OpenTUI numbers. |
 | No kitty graphics in v1 | `src/kitty_graphics.rs` is 1,509 lines, plus call sites in ~20 other files, all against Ghostty's API. No TS path. Revisit later. |
 | Node 24, not Node 20 | Node 20 reached EOL on **2026-04-30**. Node 24 is Active LTS, 22 is Maintenance LTS, 26 is Current. Pin `engines.node: "24"` (orca does) and set the floor at 22. |
+| **Yes, `plugin install` executes code fetched from a URL** | Phase 10. A plugin host that cannot install a plugin is not one. The price is written down rather than assumed: orca's "yes" to the same question is **9,914 non-test lines** of capability model, consent fingerprinting, install trust and worker supervision, and **this is ~1,400**. The difference is precisely the security model we do not have. What exists instead: a confirmation showing every argv before anything runs, a pinned content hash, a manifest that cannot change under its own build, and an audit command. None of that is a sandbox, and the handoff says so in those words. |
+| **Installs are pinned, and a changed artifact is refused** | The content hash of the fetched source tree is recorded. Re-installing the same ref with different bytes *fails* — a rewritten tag or a taken-over account cannot silently upgrade an installed plugin — and `--update` is how a user says they meant it. `--pin sha256:…` checks a first install against a hash published elsewhere. Without this, `plugin install` is `curl \| sh` with a progress bar. |
+| **There is no revocation. Nothing happens.** | No kill list, no signing key, no distribution endpoint. Orca fetches a signed, versioned list; inventing that for a host with one known plugin is the wrong order of work, and a kill list nobody publishes to is theatre. **If a plugin turns out to be malicious after a hundred people installed it, a hundred people each have to run `leap-chorus plugin remove`.** What is offered instead is an audit a user can act on: `plugin verify` re-hashes the installed tree against the install, and `plugin list --json` publishes the pinned commit and hash to compare against an advisory. That catches a local change; it cannot catch a plugin that was malicious the day it was published. A test documents the gap (`daemon/test/plugin-install.test.ts`). |
+| **No binary named `herdr` is shipped** | `$HERDR_BIN_PATH` points at a generated wrapper called `herdr-compat`, three lines of `sh` around `leap-chorus --compat herdr`. Same mechanism, no impersonation: a plugin that goes looking for `herdr` on `PATH` finds the user's real herdr, or nothing, which is the truth either way. |
 | Ship as `leap-chorus`, but rename in **phase 5**, not now | `herdr-ts` is the working name for phases 1-4. The name is baked into package names, the data root, env vars, and error codes — cheap to change before anyone has installed it, expensive after. Renaming before packaging would mean renaming twice. See `phases/archive/PHASE-5.md` Part D for the full checklist. |
 
 ## Phases
@@ -81,7 +85,7 @@ committed, verified code and a `HANDOFF.md` the next session reads.
 | 7 | Source control, finished | The panel survives a working day | **done** |
 | 8 | Search, navigation, activity bar | You stop leaving the terminal | 2-3 wk |
 | 9 | Preview, icons, settings | It is pleasant, not just correct | 2-3 wk |
-| 10 | herdr plugin host | *Optional.* Decide before starting | 2-4 wk |
+| 10 | herdr plugin host | *Optional.* It proceeded — see the four decisions above | **done** |
 | 11 | Source Control drawers | herdr-sidebar parity is actually reached | 1-2 wk |
 
 `phases/` holds only the live phases. Phases 1-5 are done and their docs moved to
@@ -99,6 +103,13 @@ onto the multiplexer. A first slice landed outside the phase system; `HANDOFF.md
 what, and what it got wrong. They do not depend on phase 6 and phase 6 does not depend
 on them. Phase 10 is an alternative to their approach, not a continuation of it: read
 its opening before starting it.
+
+**Phase 10 happened, and it is not an alternative to 7-9 after all.** Its opening
+framed it as the road not taken — run herdr's plugins instead of porting one plugin's
+features. In practice the two do not compete: the sidebar is ours and native, and the
+host runs *other people's* plugins. `herdr-file-viewer` installs from GitHub and runs
+unmodified, which is the general case the phase said would survive even if 7-9 reached
+parity. `PARITY.md` is unchanged by it; a plugin is not a parity row.
 
 **Phase 11 finishes the port.** It exists because `PARITY.md` found that
 herdr-sidebar's eight Source Control drawers — commits, file history, graph,

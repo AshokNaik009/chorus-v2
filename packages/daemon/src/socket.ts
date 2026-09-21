@@ -33,8 +33,16 @@ import type { AgentDetector } from '@leap-chorus/detect'
 
 import * as agents from './rpc/agents.js'
 import * as gitRpc from './rpc/git.js'
+import * as pluginRpc from './rpc/plugins.js'
+import * as previewRpc from './rpc/preview.js'
+import * as searchRpc from './rpc/search.js'
 import * as worktrees from './rpc/worktrees.js'
 import { FsService } from './fs.js'
+import { PluginStore } from './plugins/registry.js'
+import { PluginRunner } from './plugins/run.js'
+import { PreviewService } from './preview.js'
+import { SearchService } from './search.js'
+import { SuggestService } from './suggest.js'
 import { GitService } from './git.js'
 import { WorktreeService } from './worktree.js'
 import type { IntegrationOptions } from './integration/install.js'
@@ -112,12 +120,55 @@ export class DaemonServer {
   private readonly gitService = new GitService()
   /** Directory listings for the explorer. The client has no filesystem of its own. */
   private readonly fsService = new FsService()
+  /** Quick open and content search. Shells out to `rg`; stateless like the rest. */
+  private readonly searchService = new SearchService()
+  /** Bounded file reads for the dock's preview. See preview.ts. */
+  private readonly previewService = new PreviewService()
+  /** Commit-message drafting. The model half runs only when a caller asks. */
+  private readonly suggestService = new SuggestService()
+  /**
+   * Installed plugins, and the one runner every plugin command shares.
+   *
+   * Shared deliberately: `MAX_PLUGIN_COMMANDS_IN_FLIGHT` is a bound on what this daemon
+   * will have running at once, and a runner per request would make it a bound on
+   * nothing. The pane index is per-daemon for the same reason it is not persisted — a
+   * pane id from a previous daemon names nothing.
+   */
+  private readonly pluginRunner = new PluginRunner()
+  private readonly pluginPanes = new pluginRpc.PluginPaneIndex()
 
   private gitContext(): gitRpc.GitContext {
     return {
       git: this.gitService,
+      suggest: this.suggestService,
       fs: this.fsService,
       paneCwdInput: (paneId) => this.runtime.paneCwdInput(paneId)
+    }
+  }
+
+  private searchContext(): searchRpc.SearchContext {
+    return { ...this.gitContext(), search: this.searchService }
+  }
+
+  private previewContext(): previewRpc.PreviewContext {
+    return { ...this.gitContext(), preview: this.previewService }
+  }
+
+  /**
+   * The plugin store is built per call, not held.
+   *
+   * `registry.json` is written by the *client* during `plugin install` — the CLI process
+   * owns that, because a build that takes four minutes has no business inside the
+   * daemon's event loop, and the confirmation prompt is on a terminal the daemon does
+   * not have. A cached store would therefore go stale the moment a user installed
+   * something, and the file is a few hundred bytes.
+   */
+  private pluginContext(): pluginRpc.PluginContext {
+    return {
+      ...this.modelContext(),
+      plugins: new PluginStore(this.paths.dataRoot),
+      runner: this.pluginRunner,
+      paneIndex: this.pluginPanes
     }
   }
   /** The session model: workspaces, tabs, panes. See runtime.ts. */
@@ -530,6 +581,12 @@ export class DaemonServer {
       // --- worktrees and integrations (PHASE-5 Part B) ----------------------
       case 'fs.list':
         return gitRpc.fsList(this.gitContext(), params)
+      case 'search.files':
+        return searchRpc.searchFiles(this.searchContext(), params)
+      case 'search.content':
+        return searchRpc.searchContent(this.searchContext(), params)
+      case 'preview.read':
+        return previewRpc.previewRead(this.previewContext(), params)
       case 'git.status':
         return gitRpc.gitStatus(this.gitContext(), params)
       case 'git.stage':
@@ -546,6 +603,8 @@ export class DaemonServer {
         return gitRpc.gitCheckout(this.gitContext(), params)
       case 'git.sync':
         return gitRpc.gitSync(this.gitContext(), params)
+      case 'git.suggest':
+        return gitRpc.gitSuggest(this.gitContext(), params)
       case 'worktree.list':
         return worktrees.worktreeList(this.worktreeContext(), params)
       case 'worktree.create':
@@ -558,6 +617,14 @@ export class DaemonServer {
         return worktrees.integrationList(this.worktreeContext())
       case 'integration.install':
         return worktrees.integrationInstall(this.worktreeContext(), params)
+
+      // --- plugins (PHASE-10) -----------------------------------------------
+      case 'plugin.list':
+        return pluginRpc.pluginList(this.pluginContext(), params)
+      case 'plugin.pane.open':
+        return pluginRpc.pluginPaneOpen(this.pluginContext(), params)
+      case 'plugin.action.invoke':
+        return pluginRpc.pluginActionInvoke(this.pluginContext(), params)
 
       default:
         throw new RequestError(ErrorCodes.unknownMethod, `Unknown method: ${String(request.method)}`)

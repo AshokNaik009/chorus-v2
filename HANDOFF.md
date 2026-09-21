@@ -1,350 +1,416 @@
-# Handoff — end of Phase 7
+# Handoff — end of Phase 10
 
-**Read `PLAN.md` first, then `phases/PHASE-8.md`.** This file is the state of the world
-as this session leaves it. Everything was measured on 2026-09-20, macOS (darwin 25.6.0,
-arm64, Apple silicon, 10 cores), Node v22.1.0, pnpm 10.18.0, **git 2.54.0 (Apple Git-157)**.
+**Read `PLAN.md` first, then `phases/PHASE-11.md` and `phases/PARITY.md`.** This file is
+the state of the world as this session leaves it. Everything was measured on
+**2026-09-21**, macOS (darwin 25.6.0, arm64, Apple silicon, 10 cores), Node v22.1.0,
+pnpm 10.18.0, git 2.54.0 (Apple Git-157). **`rg`, `bat`, `glow` and `delta` are still not
+installed on this machine** — unchanged from phase 9, see *Open threads*.
 
 ## Status
 
-- **Phase 7 complete: yes, on 7 of 8 criteria.** Criterion 8 is a measurement this
-  machine could not make; see **Numbers**. Nothing is unimplemented.
-- `pnpm test` is **959 tests**, up from 893. One fails in a full serial run
-  (`client/test/multiplexer.test.ts`) and passes 16/16 alone — the flake the previous
-  handoff already documented, unchanged and still undiagnosed.
+- **Phase 10 complete: yes, on all 10 criteria.** The phase was optional and was decided,
+  not defaulted into; the four decisions it required are in `PLAN.md`'s key-decisions
+  table, with the numbers next to them.
+- `pnpm test` is **1,389 tests in 82 files, all green** on a full serial run at load
+  average 16.85. Four full runs were made; the last was clean.
+- **One of the two long-documented flakes is diagnosed and fixed** — see *Surprises*.
 
 | # | Criterion | Verdict | Where |
 |---|---|---|---|
-| 1 | `pnpm test` green | met, minus the known flake | see above |
-| 2 | rename repro is a test; staging leaves nothing unstaged | met | `daemon/src/git.test.ts`, `describe('staging a rename')` |
-| 3 | more files than the panel is tall: all reachable, view follows, right file staged | met | `client/test/source-control.test.ts`, `describe('a changes list taller than the panel')`, driven at `rows: 14` |
-| 4 | `git.branches` lists local + remote, current marked; `git.checkout` switches and tracks | met | `git.test.ts`, `describe('branches, checkout and sync')` |
-| 5 | picker opens from the panel, filters, branch line updates with no refresh | met | `client/src/branch.test.ts` + `source-control.test.ts`, `describe('the branch picker')` |
-| 6 | `git.sync` on a dirty tree; a conflict reads as a conflict | met | both files, `describe('sync')` |
-| 7 | staging a directory stops at a nested repository | met | `git.test.ts` + `client/test/explorer.test.ts`, `describe('staging from the explorer')` |
-| 8 | no regression in `bench/RESULTS.md` | **not measurable here**; no regression shown by A/B | see **Numbers** |
+| 1 | `pnpm test` green | met | 1,389/1,389 |
+| 2 | `plugin install <owner/repo>` clones, builds, registers — against a **local fixture** | met | `daemon/test/plugin-install.test.ts`, `client/test/plugin-cli.test.ts` |
+| 3 | a declared action opens in a split pane and in a tab, both idempotent | met | `daemon/test/plugins.test.ts` |
+| 4 | `plugin list --json` matches the shape the launchers parse | met | `client/test/plugin-cli.test.ts` `describe('plugin list --json')` |
+| 5 | the shim answers every command the launchers use | met — and it is **six**, not five | `client/src/compat.test.ts`, plus end-to-end through a real daemon |
+| 6 | a failed build is reported and leaves nothing half-installed | met | `daemon/test/plugin-install.test.ts` `describe('a build that fails')` |
+| 7 | output over the cap is truncated and reported, not buffered | met | `daemon/src/plugins/run.test.ts` |
+| 8 | an install is pinned; a changed artifact at the same ref is refused | met | same file, `describe('pinning')` |
+| 9 | the revocation decision is exercised by a test | met — the choice was "nothing", and the test says so | same file, `describe('revocation: what this host does not have')` |
+| 10 | `herdr-file-viewer` installs and opens | met, on macOS | see **Which plugins were tested** |
 
 ## What exists now
 
-Source control is usable for a day's work without reaching for the shell. The panel
-scrolls, its branch line is a picker you can filter, `S` syncs, and staging is
-rename-aware and nested-repository-aware on both sides of the index. The Explorer can
-stage a directory. Two rename defects and one scrolling defect that PHASE-7 opened with
-are closed and pinned by tests; the third item (`--renames`) turned out to matter for a
-reason the doc did not give. The daemon is still stateless — every call shells out, and
-nothing is cached.
+`leap-chorus` is a herdr plugin host. `leap-chorus plugin install <owner>/<repo>` fetches
+a shallow checkout over git, reads the plugin's `herdr-plugin.toml`, shows the user every
+argv it is about to run and every manifest key it will ignore, runs the declared build,
+refuses a manifest the build rewrote, and swaps the result into a store under the data
+root with one rename and a way back. What it installed is **pinned**: the content hash of
+the fetched source is recorded, and the same ref producing different bytes later is
+refused rather than installed. A plugin's declared pane or action opens as an **ordinary
+pane** — `pane.split` or `tab.create` with the plugin's argv — idempotently, so a second
+open focuses the first. A plugin's own process gets herdr's environment variable names,
+and `$HERDR_BIN_PATH` points at a generated wrapper called `herdr-compat` that translates
+herdr's CLI into ours. **`herdr-file-viewer` v1.17.0 installs from GitHub and runs
+unmodified**, including its own launch-or-focus-or-toggle logic.
+
+Three sidebar bugs were also fixed, all reported from screenshots during the phase and
+all in phase 7-9 code: a click on an Explorer row did nothing but move the highlight, the
+Preview view said "nothing selected" while a file sat under the tree's cursor, and — after
+the first fix went too far — a click on a file spawned a `$PAGER` pane per click.
 
 ## Deliverables, as they landed
 
 | File | Lines | What |
 |---|---|---|
-| `packages/daemon/src/git.ts` | 662 (was 282) | rename-aware stage/unstage, directory staging, nested-repo boundary, `branches`, `checkout`, `sync` |
-| `packages/daemon/src/rpc/git.ts` | 128 (was 95) | `git.branches` / `git.checkout` / `git.sync` |
-| `packages/client/src/scrollview.ts` | 106 | the shared viewport: offset, cursor-follow, bar |
-| `packages/client/src/scm.ts` | 386 (was 333) | scrolling, branch key, sync key, note line, click routing |
-| `packages/client/src/branch.ts` | 200 | the branch picker overlay |
-| `packages/client/src/explorer.ts` | 367 (was 346) | on `ScrollView`; `s` stages; errors wrap |
+| `packages/daemon/src/plugins/manifest.ts` | 392 | `herdr-plugin.toml`: the subset honoured, and every key that is not |
+| `packages/daemon/src/plugins/install.ts` | 451 | fetch, preview, build, pin, atomic swap, rollback |
+| `packages/daemon/src/plugins/registry.ts` | 277 | the on-disk store, the two content hashes, `verify` |
+| `packages/daemon/src/plugins/run.ts` | 258 | bounded output, bounded time, bounded concurrency |
+| `packages/daemon/src/rpc/plugins.ts` | 335 | `plugin.list`, `plugin.pane.open`, `plugin.action.invoke` |
+| `packages/client/src/plugin-cli.ts` | 568 | `plugin install/list/verify/remove/config-dir/shim/pane/action` |
+| `packages/client/src/compat.ts` | 281 | the herdr translation table, and the shim's text |
+| `scripts/herdr-compat.mjs` | 44 | the `$HERDR_BIN_PATH` shim for a source checkout |
+| `packages/daemon/src/plugins/manifest.test.ts` | 303 | 40 tests |
+| `packages/daemon/test/plugin-install.test.ts` | 367 | 34 tests, real git |
+| `packages/client/src/compat.test.ts` | 233 | 34 tests |
+| `packages/daemon/test/plugins.test.ts` | 417 | 29 tests, real daemon |
+| `packages/daemon/src/plugins/registry.test.ts` | 243 | 25 tests |
+| `packages/client/test/plugin-cli.test.ts` | 338 | 19 tests, real child processes |
+| `packages/daemon/src/plugins/run.test.ts` | 160 | 16 tests |
+| `packages/daemon/test/plugin-fixture.ts` | 118 | a plugin as a real git repository |
+| `packages/client/src/explorer.test.ts` | 59 | 3 tests, the click fix |
 
-`wrapWords` moved from `scm.ts` to `chrome.ts` because the Explorer needed it too — see
-**Surprises**.
+**`install.ts` is a fifth file the phase's deliverable list did not name.** It was going
+to be half of `registry.ts`, and separating "what is installed" from "how something gets
+installed" is worth one extra file: the store is read on every plugin launch and the
+installer runs once, in a different process.
+
+## The four decisions, and where they landed
+
+All four are in `PLAN.md`'s key-decisions table, which is where the phase asked for them.
+Short forms:
+
+1. **Does `leap-chorus` execute code fetched from a URL on a user's say-so? Yes.** The
+   number the phase asked to be written next to it: orca's yes is **9,914 non-test
+   lines**; ours is **~1,400** including tests. The difference is the security model —
+   no capability set, no consent fingerprint, no kill list, no worker isolation.
+2. **Pinned.** Content hash of the fetched source; a changed artifact at the same ref is
+   refused; `--update` to accept, `--pin` to verify a first install against a published
+   hash.
+3. **Revocation: nothing happens.** Written down rather than discovered later. See below.
+4. **The shim is honest.** No binary named `herdr` is shipped.
+
+## What a user is trusting, in plain words
+
+`plugin install` runs **an arbitrary program from a stranger's repository, as the user,
+with the user's filesystem, network and credentials**. For `herdr-file-viewer` that
+program is `scripts/fetch-or-build.sh`, which downloads a prebuilt binary or falls back
+to `cargo build`.
+
+What is actually defended:
+
+- **Nothing runs before it has been shown.** The manifest is read from the fetched
+  checkout and printed — id, version, every build argv, every entrypoint argv, every
+  ignored key — and the build runs only after a yes. `--yes` is required when stdin is
+  not a terminal, so this is not something a script can do to a user.
+- **The manifest cannot change under its own build.** herdr's
+  `ensure_manifest_unchanged_after_build`, and the attack is sharp: without it a build
+  script appends `[[actions]]` to the file the preview rendered and the host registers
+  what nobody saw.
+- **The artifact is pinned**, as above.
+- **A failed install leaves nothing.** Everything happens in a temp directory under the
+  data root; the store is touched by one rename, with the previous checkout kept aside
+  until the registry write succeeds.
+- **Output and concurrency are bounded** — 64 KiB, 32 in flight, herdr's numbers.
+
+**None of that is a sandbox**, and the phase was explicit that the handoff must not imply
+it is. Bounding output is not a security boundary. A plugin can read every file the user
+can read and open every socket the user can open, before and after the confirmation.
+
+## Revocation: what this does not have
+
+There is **no kill list**. No signed list, no fetch, no revocation at a distance. If a
+plugin turns out to be malicious after a hundred people installed it, **a hundred people
+each have to run `leap-chorus plugin remove`**. `daemon/test/plugin-install.test.ts` has
+a test that says exactly this, because the phase asked for the gap to be exercised rather
+than quietly dropped.
+
+What exists instead, and what it is worth:
+
+| | Catches | Does not catch |
+|---|---|---|
+| `plugin verify` | a file changed in the store after the install | a plugin that was malicious the day it was published |
+| the pin | a rewritten tag, an account takeover upgrading an installed plugin | the first install of a bad plugin |
+| `plugin list --json` | publishes the commit and hash, so a user can compare against an advisory | nothing, on its own — it needs someone to read it |
+
+Orca's `plugin-kill-list.ts` is the shape of the thing that is missing, including the
+detail worth copying if it is ever built: refuse a list whose `generatedAt` is more than
+24 hours ahead of the clock, or a far-future entry disables revocation permanently.
+
+## The manifest subset honoured, and what is ignored
+
+| Key | Honoured |
+|---|---|
+| `id` `name` `version` `description` | yes, validated |
+| `platforms` | yes — an entry not for this platform is never offered |
+| `[[build]]` | yes, at install, in the fetched checkout, bounded |
+| `[[actions]]` | yes — argv, runnable headless or in a pane |
+| `[[panes]]` | yes — argv, opened in a split or a tab |
+| `[[events]]` | **no** |
+| `[[startup]]` | **no** |
+| `[[link_handlers]]` | **no** |
+| `min_herdr_version` | **no** — a claim about a program this is not |
+| an action's `contexts` | **no** — it picks a herdr menu we do not have |
+| a pane's `width` / `height` | **no** — they size a popup we do not have |
+
+**Every ignored key is named, never dropped.** `manifest.ignored` collects them, the
+install preview prints them with the line "this host does not run those; the plugin may
+not work as written", and `plugin list` keeps them. An unknown key is reported too, and
+marked `(unknown)`, so a typo in `platforms` is distinguishable from a feature we skipped.
+This is the same failure mode the phase's notes on orca's capability set warn about: a
+plugin that appears installed and quietly does nothing.
+
+**Placements.** herdr has five; this multiplexer has one kind of pane. `split` and `tab`
+are honoured; `overlay`, `popup` and `zoomed` fall back to `split`, and the fallback is
+reported in `placementFallbackFrom` rather than hidden.
+
+**Ids are validated harder than herdr's.** A plugin id becomes a directory name; herdr
+percent-encodes whatever it is given, and we refuse anything that is not already a safe
+path component. The encoder is a second place for a traversal bug to hide.
 
 ## Types and contracts the next phase depends on
 
 Three new methods on `AgentMethodMap`, all in `AGENT_METHODS`:
 
 ```ts
-'git.branches': { params: GitStatusParams;   result: GitBranchesResult }
-'git.checkout': { params: GitCheckoutParams; result: GitStatusResult }
-'git.sync':     { params: GitStatusParams;   result: GitSyncResult }
+'plugin.list':          { params: PluginListParams;         result: PluginListResult }
+'plugin.pane.open':     { params: PluginPaneOpenParams;     result: PluginPaneOpenResult }
+'plugin.action.invoke': { params: PluginActionInvokeParams; result: PluginActionInvokeResult }
 ```
 
 ```ts
-interface GitBranch { name: string; current: boolean; remote: boolean }
-interface GitBranchesResult { root: string; branches: readonly GitBranch[] }
-interface GitCheckoutParams extends GitTargetParams { branch: string; remote?: boolean }
-interface GitSyncResult { status: GitStatusResult; message: string }
-```
+type PluginPlatform = 'linux' | 'macos' | 'windows'
+type PluginPlacement = 'split' | 'tab'
+type PluginDeclaredPlacement = 'overlay' | 'popup' | 'split' | 'tab' | 'zoomed'
+type PluginEntrypointKind = 'pane' | 'action'
 
-`GitStatusResult`, `GitFileEntry`, `GitPathsParams` and `FsListResult` are unchanged.
-`git.stage` and `git.unstage` keep their signatures; only what they do with the paths
-changed.
-
-The shared viewport, which PHASE-8's own lists should use rather than copy:
-
-```ts
-class ScrollView {
-  offset: number
-  follow(cursor: number, count: number, height: number): number
-  by(delta: number, count: number, height: number): void
-  indexAt(row: number, top: number, count: number, height: number): number | null
+interface PluginEntrypointInfo {
+  id: string; title: string; description: string | null
+  kind: PluginEntrypointKind
+  placement: PluginPlacement
+  placementFallbackFrom: PluginDeclaredPlacement | null
+  command: readonly string[]          // argv; never run through a shell
+  platforms: readonly PluginPlatform[] // empty means every platform
 }
-function needsScrollbar(count: number, height: number): boolean
-function renderScrollbar(buffer: ScreenBuffer, area: Rect, offset: number, count: number, palette: Palette): void
+
+interface PluginPin {
+  source: string          // 'owner/repo[/subdir]' or a local path, as typed
+  ref: string | null      // null when the remote's default HEAD was taken
+  commit: string
+  contentHash: string     // sha256 over the *fetched source*, `.git` excluded
+}
+
+interface InstalledPluginInfo {
+  id; name; version; description: string | null
+  root; manifestPath; configDir; stateDir: string
+  platforms: readonly PluginPlatform[]
+  entrypoints: readonly PluginEntrypointInfo[]
+  ignored: readonly string[]
+  pin: PluginPin
+  installedHash: string   // sha256 over the *built store*, what `verify` compares
+  installedAt: number
+  missing: boolean        // registered, but its files are gone
+}
 ```
 
-It holds **an offset and nothing else** — no cursor, no rows, no height. The cursor
-belongs to the panel (it means different things in a tree and in a two-section list) and
-the height is the renderer's, because a panel that has not been drawn has none. `follow`
-is therefore called from `render`, which is how the Explorer's original `syncScroll`
-already worked.
+**Two hashes, because there are two questions.** `pin.contentHash` answers "did the remote
+hand me the same bytes as last time?" and is taken before the build. `installedHash`
+answers "has anything changed under my feet since?" and is taken after. One hash cannot do
+both: a build writes into its own checkout, so a pin taken after it would differ on every
+machine, and a check that always fires is a check nobody reads.
 
-**Used by:** `ScmPanel`, `ExplorerPanel`, and `BranchPicker`. The old
-`ExplorerPanel.syncScroll` and its private `scroll` field are gone.
+### The services
 
-### The exact git invocations
+```ts
+class PluginStore {
+  constructor(dataRoot: string)
+  readonly pluginsDir, registryPath, storeDir, tmpDir, binDir, shimPath: string
+  rootFor(id): string; configDirFor(id): string; stateDirFor(id): string
+  ensureUserDirs(id): void
+  list(): InstalledPluginInfo[]
+  get(id): InstalledPluginInfo | null
+  save(record: PluginRecord): void
+  remove(id, options?: { purge?: boolean }): boolean
+  verify(id): PluginVerifyReport | null    // 'ok' | 'changed' | 'missing'
+}
+function hashDirectory(root: string): string   // sorted, exec-bit only, symlinks unfollowed
 
-| Operation | Command | Differs from herdr-sidebar? |
+class PluginInstaller {
+  constructor(store: PluginStore, options?: { runner?; now?; platform? })
+  install(options: InstallOptions): Promise<InstallOutcome>
+}
+function parsePluginSource(raw: string): PluginSource   // 'owner/repo[/sub]' or a local path
+function remoteUrlFor(source: PluginSource): string     // a path becomes file://
+
+class PluginRunner {
+  constructor(options?: { maxBytes?; maxInFlight?; spawnFn? })
+  run(request: PluginRunRequest): Promise<PluginRunOutcome>   // rejects only on the in-flight cap
+  get inFlight(): number
+}
+const PLUGIN_OUTPUT_MAX_BYTES = 65536
+const MAX_PLUGIN_COMMANDS_IN_FLIGHT = 32
+
+function parsePluginManifest(text: string): PluginManifest
+function loadPluginManifest(path: string): { manifest; manifestPath; root }
+function currentPluginPlatform(p?: NodeJS.Platform): PluginPlatform | null
+function effectivePlatforms(entry, plugin): readonly PluginPlatform[]
+function platformAllows(platforms, current): boolean
+
+// client
+function translateHerdrArgv(argv, env?): Translation      // { argv, notes }
+function shimScript(execPath: string, entry: string | null): string
+function writeShim(shimPath: string, options?): string
+function herdrPluginListJson(plugins, shimPath): Record<string, unknown>
+```
+
+### What changed outside the plugin code
+
+```ts
+interface TabCreateParams {          // gained command/args, mirroring workspace.create
+  ...
+  command?: string
+  args?: readonly string[]
+}
+
+type ExplorerOutcome =
+  | ...
+  | { kind: 'preview'; path: string }   // new: a click, which is not `⏎`
+
+class ExplorerPanel {
+  activate(): ExplorerOutcome                          // was private
+  clickRow(row: number, area: Rect): ExplorerOutcome   // was `: boolean`
+}
+class SidebarPanels {
+  previewTarget(): string | null   // the file to seed an empty preview with
+}
+```
+
+`leap-chorus pane list` gained `tabId` and `workspaceId`, and a `--herdr-json` flag. There
+is a new `leap-chorus tab list|focus|close`. Both are explained under *Surprises*.
+
+## The data root
+
+```
+<dataRoot>/plugins/
+  registry.json     what is installed, and what it is pinned to (durable, one .bak)
+  store/<id>/       the checkout, as fetched and built
+  config/<id>/      HERDR_PLUGIN_CONFIG_DIR — the user's; kept on uninstall
+  state/<id>/       HERDR_PLUGIN_STATE_DIR
+  bin/herdr-compat  the $HERDR_BIN_PATH shim, rewritten on every `plugin …` call
+  tmp/              install scratch; nothing here survives a failed install
+```
+
+The registry is written by the **client** during `plugin install` and re-read by the
+daemon on every use. Install means a `git fetch` and then a stranger's build script, which
+has no business inside the process that owns every PTY, and the confirmation it must ask
+for is on a terminal the daemon does not have. herdr splits it the same way and for the
+same reason. A cached store in the daemon would go stale the moment a user installed
+something; the file is a few hundred bytes.
+
+## Which plugins were tested, at which versions
+
+| Plugin | Version | How |
 |---|---|---|
-| status | `status --porcelain -z --branch --renames --untracked-files=all` | no |
-| stage | `add -A -- <paths…>`, in chunks of 64 | **enumerated, not passed through** — see below |
-| unstage | `reset -q HEAD -- <paths…>` (or `-- .` for all) | yes: herdr uses `reset -q --` with an `rm --cached` fallback |
-| discard (tracked) | `checkout -- <paths…>` | yes: herdr uses `clean -fd` for untracked; we `rm` in Node |
-| commit | `commit -m <message>` | no |
-| branches | `for-each-ref --sort=-committerdate --format=%(HEAD)%00%(refname:short)%00%(refname)%00%(symref) refs/heads refs/remotes` | no |
-| checkout | `checkout <name>`, or `checkout --track <name>` when remote | no |
-| sync | `pull --rebase --autostash`, **then** `push` | no |
-| rename pairing | `hash-object -- <paths…>` and `ls-files -s -z -- <paths…>` | **ours; herdr has no equivalent** |
+| `smarzban/herdr-file-viewer` | **1.17.0**, commit `c237626260478d5f2d788149fc741ddf3c3588ba` | installed from GitHub on macOS arm64. `scripts/fetch-or-build.sh` took the fast path: "installed prebuilt v1.17.0 (aarch64-apple-darwin), verified SHA-256" — **no Rust toolchain was needed** |
+| a local fixture | n/a | `daemon/test/plugin-fixture.ts`, a real git repository; everything in CI uses this |
 
-**`sync` is `pull --rebase --autostash` then `push`, unchanged from herdr-sidebar.** The
-autostash is load-bearing, not a convenience: the tree a source-control panel is open
-over is a dirty tree by definition, and `pull` or `pull --ff-only` refuses to start on
-one. Substituting either would make the button work only in the state where nobody needs
-it.
-
-**Push does not run if the pull failed.** Verified: a stopped rebase leaves HEAD
-detached, and `push` from there fails with `fatal: You are not currently on a branch`,
-which describes nothing the user did.
-
-**Two deviations from herdr-sidebar, both deliberate:**
-
-1. **`unstage` uses `reset -q HEAD --`, not `reset -q --` with an `rm --cached`
-   fallback.** herdr's fallback exists for an unborn branch. Verified on git 2.54:
-   `reset -q HEAD -- <path>` **exits 0 on a repository with no commits**, so the
-   fallback has nothing to catch here — and `rm --cached` on a repo that *does* have a
-   HEAD stages a deletion instead of unstaging, which is why herdr guards it with
-   `has_head()`. Not porting the fallback removes the need for the guard. If a git old
-   enough to fail this ever matters, `has_head()` is the thing to port.
-2. **`stage` enumerates instead of passing the path to `git add`.** Same reasoning as
-   herdr's `stage_under`, applied to every stage rather than only to directories, so
-   there is one code path. A file path expands to itself plus its rename partner; a
-   directory expands to the working-tree entries beneath it; an empty path list expands
-   to the whole repository.
-
-### Where the scroll viewport lives, and which panels use it
-
-`packages/client/src/scrollview.ts`. `ScmPanel` and `ExplorerPanel` both draw through
-it, and `BranchPicker` uses it for its own list. The bar takes the panel's **last
-column, and only when there is something to scroll** — reserving it unconditionally
-would steal a column of filename from every panel that fits.
-
-One panel-level rule lives in `ScmPanel.follow`, not in `ScrollView`, because it is
-knowledge about headers: **when the cursor lands on the first row of a section, the
-section header comes with it.** Without that, staging a file scrolls the view to the
-file's new position and leaves `Staged Changes (1)` exactly one row above the top, which
-reads as the file having moved into nothing. It was found by a test failing, not by
-inspection.
-
-### Key map changes in the Source Control panel
-
-| Key | Was | Is |
-|---|---|---|
-| `b` | close (a second `q`) | **open the branch picker** |
-| `S` | — | **sync** |
-| `q`, `esc` | close | unchanged |
-
-`b` was worth more as the branch key: closing already had two keys and switching branch
-had none. `S` is capitalised deliberately, matching herdr-sidebar — sync talks to the
-remote and can rebase, so it should not be one relaxed finger away. The Explorer keeps
-`b` as a close alias; it has no branch line. Both hint strings are updated.
-
-The Explorer gained **`s` = stage the selected path**, which is where criterion 7 lives:
-a directory is a thing you can point at in a tree and cannot in the changes list.
-
-## The three defects
-
-### 1. Staging a rename left a dangling deletion — fixed, but **not the way PHASE-7 says**
-
-This is the most important thing in this handoff. **The phase doc prescribes a fix that
-does not close its own repro.**
-
-The doc says `GitFileEntry.origin` "already carries the original path over the wire; it
-is simply unused", and that passing both paths (herdr's `add -A -- <path> <orig>`) is
-the fix. Verified against git 2.54.0, and it is not. Run the doc's own repro:
-
-```sh
-git mv old.txt new.txt && git reset -q HEAD -- .
-git status --porcelain -z --renames | tr '\0' '|'
-#  D old.txt| ?? new.txt|
-```
-
-Two unrelated entries, **`origin: null` on both**. Git only pairs a worktree-side rename
-when the target is already tracked, and an untracked file is not. So there is no origin
-to pass, and herdr-sidebar's `Git::stage` has exactly the same gap — its own test for
-this (`stage_candidates_keep_both_sides_of_an_unstaged_rename`, `git.rs:1285`) feeds
-`parse_status` a **synthetic** ` R src/new.rs\0src/old.rs\0` entry that real git does
-not emit in this state.
-
-What *does* close it: `git add -A -- old.txt new.txt` composes the two back into an `R`
-once both land in the index together. So the missing half is found the way git itself
-would — by blob identity:
-
-- `git hash-object -- <untracked paths>` for the working-tree side
-- `git ls-files -s -z -- <deleted paths>` for what the index holds
-
-**Guarded three ways, because a stage must never stage work the user did not select:**
-exact content (not similarity), **exactly one** candidate match on each side, and the
-empty blob (`e69de29…`) never pairs — every `.gitkeep` in a repository hashes the same.
-Both guards have tests. When no pair is found, behaviour falls back to the old one,
-which is merely unhelpful rather than wrong.
-
-The origin fix is **also** implemented, because it is right for the cases where status
-*does* report a rename (`RM`, ` R`, and the whole staged side).
-
-**The same defect exists on the unstage side and PHASE-7 does not mention it.** Verified:
-a staged `R old -> new` reset by its new path alone leaves `D old.txt` still staged.
-Fixed by the same expansion against the staged list.
-
-### 2. The Source Control panel did not scroll — fixed
-
-Lifted the Explorer's `syncScroll` into `scrollview.ts` rather than writing it twice,
-as the phase asked. The consequence worth naming: the cursor used to move onto rows that
-were never drawn, so `Enter` could stage a file the user could not see.
-
-### 3. `--renames` — **it matters, and not for the reason you would guess**
-
-The phase doc suspected it was cosmetic because rename detection is on by default.
-Measured:
-
-```
-$ git status --porcelain -z --branch --untracked-files=all
-## main|R  new.txt|old.txt|                      # rename detected
-$ git -c status.renames=false status --porcelain -z --branch --untracked-files=all
-## main|A  new.txt|D  old.txt|                   # decomposed
-$ git -c status.renames=false status --porcelain -z --branch --renames --untracked-files=all
-## main|R  new.txt|old.txt|                      # the flag overrides the config
-```
-
-So it is cosmetic **in a default configuration** and not otherwise: a user with
-`status.renames = false` (or `diff.renames = false`, which it inherits from) changes what
-the panel shows. The flag on the command line wins over both. Passing it makes the
-daemon's output depend on the repository rather than on the user's `~/.gitconfig`, which
-is the property worth having. Passed.
-
-## Numbers
-
-**Criterion 8 could not be measured on this machine, and `bench/RESULTS.md` is left at
-the committed run rather than overwritten with a contaminated one.**
-
-The machine sat at load average **8–23 for the whole session** (10 cores), from Chrome,
-VS Code, `PerfPowerServices` and `BTLEServer` — the last of which is the *same*
-unrelated macOS process the previous handoff blamed for spoiling its measurements. It
-was polled every 25 s for eight minutes and never dropped below 7.7.
-
-A plain run produced `Realistic 15` frame p99 of **21.06 ms** against the committed
-3.24 ms, which would have recorded criterion 7 as a FAIL. It was reverted
-(`git checkout bench/RESULTS.md`) rather than committed, and an **A/B** run instead —
-the same benchmark against the pre-phase-7 tree and the phase-7 tree, back to back:
-
-| Scenario | p50 before | p50 after | paint p50 before | paint p50 after | p99 before | p99 after |
-|---|---|---|---|---|---|---|
-| Single active | 0.55 ms | 0.45 ms | 0.43 ms | 0.39 ms | 4.43 ms | 10.32 ms |
-| Realistic 15 | 2.04 ms | 2.07 ms | 0.53 ms | 0.53 ms | 10.38 ms | 15.64 ms |
-| Stress, visible | 3.63 ms | 3.63 ms | 0.55 ms | 0.56 ms | 23.80 ms | 32.10 ms |
-| Stress, 14 hidden | 3.29 ms | 3.26 ms | 0.36 ms | 0.36 ms | 16.05 ms | 15.41 ms |
-
-Load average was **~10 during the "before" arm and ~23 during the "after" arm**, so the
-p99 columns are not comparable and are printed only so nobody re-derives them and thinks
-they were hidden.
-
-**What the A/B does establish:**
-
-- **`p50` is unmoved** — within 0.03 ms on three of four scenarios, and *faster* on the
-  fourth. `paint p50`, which is this client's own CPU and the only thing phase 7 could
-  have touched, is identical to two decimal places on three of four.
-- **The committed p99 numbers are not reproducible on this machine at any tree**, phase 7
-  or not: the pre-phase-7 baseline also missed the 16 ms budget (10.38 ms is inside it,
-  but `Stress, visible` at 23.80 ms is not). That is the load, not the code.
-- In both arms the p99 blowup is almost entirely in **`fetch`** — time spent waiting on
-  the daemon over the socket — which is the signature of a descheduled process, not of
-  work being done.
-
-**By construction there is nothing for a regression to come from.** With no panel open,
-`render()` gained one `this.branches !== null` null check and `statusContent()` one
-ternary. Every other change is in `git.*` RPCs, which the benchmark never calls.
-
-**Do not accept this as done.** Re-run `node bench/dist/render-scale.js --seconds 15` on
-a quiet machine — `uptime` first, and nothing else running, including the test suite —
-and commit the result. That instruction is now three handoffs old.
+The viewer was driven **through its own launcher scripts**, not through our RPC:
+`scripts/open-file-viewer.sh` opened it in a split, a second run closed it again (its own
+`--launch-decision` returning `CLOSE`), and `scripts/open-file-viewer-tab.sh` opened it in
+a tab. It rendered this repository's tree with git decorations and the branch name in its
+footer. **This is the only criterion requiring the network**, and it is the one that found
+the two things below.
 
 ## Surprises
 
-Things that contradicted a document or cost a wrong assumption first:
-
-- **PHASE-7's stated fix for its own defect 1 does not work**, and neither does
-  herdr-sidebar's, whose test for it is synthetic. Fully written up above. This is the
-  one thing in this handoff that changes what a reader believes.
-- **`reset -q HEAD -- <path>` exits 0 on an unborn branch** on git 2.54. The previous
-  handoff recorded that `restore --staged` fails there and that `reset` was chosen
-  because of it; what it did not record is that herdr's `rm --cached` fallback is
-  therefore dead code in our port.
-- **`%(HEAD)` in `for-each-ref` is `*` or a *single space*, never empty**, so the field
-  has to be trimmed before comparing. A real clone does carry a symbolic
-  `refs/remotes/origin/HEAD`, so the symref filter is not defensive — without it the
-  picker offers a branch called `origin` that checks out detached.
-- **A rebase conflict holds the dirty tree in the autostash and leaves it off disk.**
-  The work is not lost — `rebase --continue` or `--abort` brings it back — but "sync did
-  not lose your work" and "your edits are still in the file" are different claims, and
-  only the first is true mid-conflict. git's own hint block says which command restores
-  it, which is the argument for surfacing stderr verbatim.
-- **`key.char` is the *unshifted* codepoint.** `S` arrives as `{char: 's', MOD_SHIFT,
-  shiftedChar: 'S'}` (`input/src/parse-csi.ts:416`, deliberate, so a binding written `H`
-  fires under both the legacy and kitty protocols). The panels were being handed
-  `key.char` directly, so `s` and `S` were indistinguishable to them and the sync key
-  silently could not work. There is now one `App.typedChar(key)` and the prompt, the
-  picker and both panels share it.
-- **The Explorer clipped its errors where the panel wrapped them.** "nothing staged:
-  those paths belong to a nested repository, not this one" became "nothing staged: those
-  paths belong" in 34 columns — the half that names no reason. `wrapWords` moved from
-  `scm.ts` to `chrome.ts` (which both panels already import for `Palette`) and the
-  Explorer now wraps too. Found by a test failing for the wrong reason.
-- **Staging a file whose section header is the row above scrolls the header off.** See
-  **Types and contracts**. Not a `ScrollView` bug; a missing panel-level rule.
-- **`ScmPanel.clickRow` and `ExplorerPanel.clickRow` were dead code** — written in the
-  unphased slice, never called from `app.ts`. Both are live now via `handlePanelClick`,
-  which also gave the branch line its click (herdr-sidebar opens its picker that way and
-  has no key for it).
+- **It is six commands, not five — and translating commands is not enough.** The phase
+  counted five from `herdr-file-viewer`'s description. Reading its launcher scripts found
+  `tab focus <tab_id>`, which the tab launcher uses to switch to an existing viewer tab
+  instead of opening a second one; `leap-chorus` had no `tab` command at all. Worse, the
+  *output* is part of the contract: `open-file-viewer.sh` pipes `pane list` straight into
+  the viewer binary's own Rust `launch_decision`, which deserializes
+  `{result:{panes:[{pane_id,label,focused,tab_id}]}}` and **answers `OPEN` for anything it
+  cannot parse**. Our `pane list` printed a bare camelCase array and carried no `tab_id` at
+  all — close enough to look right, and different enough that the plugin would have worked
+  while silently losing focus-and-close forever, opening a new viewer on every keypress.
+  Hence `pane list --herdr-json`, which only the shim sets. **A compatibility shim that
+  only translates argv is a shim that half works, and the half that fails is silent.**
+- **A plugin starts in its own directory, not the user's.** `herdr-file-viewer`'s manifest
+  is `command = ["./target/release/herdr-file-viewer"]` — a *relative* program. This host
+  had copied the obvious-looking thing, the focused pane's cwd, and it survived every
+  fixture because a fixture declares an absolute `sh`. Started in the user's repository
+  the program is not there, the pane's process dies immediately, and the pane closes
+  itself a frame later: indistinguishable from a plugin that opened and instantly crashed,
+  with nothing on screen to read. herdr's `plugin_pane_cwd` defaults to `plugin_root` and
+  so does its action runner. A plugin that wants the user's directory reads
+  `focused_pane_cwd` out of `HERDR_PLUGIN_CONTEXT_JSON`, which is what that field is for —
+  and it is how the viewer shows the right tree while running from somewhere else.
+- **`survival.test.ts`'s flake was never the survival assertion.** Three handoffs called
+  it undiagnosed. It is `ENOTEMPTY: directory not empty, rmdir …/daemon` out of
+  `cleanupDataRoots`: `stop()` sent SIGKILL after a 5 s SIGTERM timeout and then
+  **returned without waiting**, so teardown deleted the data root while a live daemon was
+  still writing its session file into it. `rmSync` walks the tree, the daemon puts a file
+  back, `rmdir` fails — and a teardown failure fails the *test*, which is how a harness
+  race looked like a product bug for three phases. Fixed by waiting for the SIGKILL to
+  land, plus a bounded retry in `cleanupDataRoots` as a backstop. It went from 1/5 to 6/6
+  in isolation at load 18.
+- **The click gesture was wrong, and the first fix was wrong in the other direction.**
+  Reported from a screenshot: folders "not getting nested". A click on an Explorer row
+  only moved the cursor — it never expanded anything — so a folder looked inert to anyone
+  using a mouse. The first fix made a click mean `⏎`, which with `[sidebar] preview` off
+  hands the file to `$PAGER` **in a new pane**: clicking down a tree left one pane per
+  click, and since the dock holds the keyboard none of them could even be scrolled. A
+  click and `⏎` are not the same request. A click now folds a directory and previews a
+  file in the dock; `⏎` is unchanged.
+- **The preview's empty state was a lie about its own state.** Switching to the Preview
+  view with a file highlighted in the tree said "nothing selected", because only `⏎` and
+  the row menu had ever handed it a path. It now seeds from the tree's cursor, and still
+  says nothing is selected when that cursor is on a directory.
+- **A plugin's pane needed no new pane type, exactly as the phase said.** `pane.split` and
+  `tab.create` with an argv, and the only thing missing was `command`/`args` on
+  `tab.create` — which `workspace.create` has had since phase 4 and `pane.split` since
+  before that. Three lines in the reducer.
+- **Idempotency is per entrypoint, not per placement**, and that turned out to be the
+  reading the plugin's own launcher agrees with: asking for the viewer in a tab when it is
+  already open in a split focuses the split. The thing the user wants is the viewer, not
+  another one.
 
 ## Open threads deliberately left
 
-- **Criterion 8.** Above. It is a machine, not a task.
-- **Picking `origin/x` when a local `x` already exists fails** with git's
-  `fatal: a branch named 'x' already exists`. herdr-sidebar behaves identically and the
-  message says exactly what to pick instead, so it was kept rather than papered over.
-  Deduping the picker, or falling back to `checkout x`, is the fix if it annoys anyone.
-- **`hash-object` does not apply `.gitattributes` filters.** A repository with
-  `text=auto` and CRLF working-tree content can hash differently from what `git add`
-  would store, so the rename pairing quietly does not fire. The failure mode is the old
-  behaviour, not a wrong stage. `--path` would fix it at the cost of one invocation per
-  file.
-- **Similarity-based rename detection is not attempted.** `git mv` followed by an edit
-  decomposes and stays decomposed. Exact content only, deliberately: a looser rule
-  stages work the user did not select.
-- **The panel does not poll.** A `git` command run in a pane behind it still needs `r`.
-  Same reason the daemon caches nothing; a watcher is a phase-9 conversation.
-- **No commit history, file history, stashes, tags or remotes browsing**, per the
-  phase's "Do NOT do" list. Also no search or quick open (phase 8), no preview, icons or
-  settings UI (phase 9), no AI commit drafting, no plugin host.
-- **`git.sync` has no timeout of its own.** It inherits `runGit`'s, which means a push
-  to an unreachable remote blocks that long. `DaemonClient` still has no request timeout
-  either — unchanged from phase 4.
-- **Multi-repo is not ported.** herdr-sidebar's `discover_all` finds child repositories
-  two levels down and gives each its own commit box; ours follows the focused pane into
-  exactly one repository. That is the right shape for a multiplexer where switching pane
-  switches repository, but it is a real difference from the source material.
-- **`client/test/multiplexer.test.ts` is still flaky** and still undiagnosed. Passes
-  alone; a different test fails each full run. Predates all sidebar work.
-- **Criterion 2 of phase 5 is still the important gap** — detection has never been
-  checked against a running agent, and three of six platform slots have never been
-  built. Nothing in phase 7 moved that.
+- **`multiplexer.test.ts` is still flaky and is a different cause.** Roughly 1 run in 6 at
+  load 12, failing on `expected 0 to be greater than or equal to 2` — a timing assertion,
+  not a teardown race. It passes in isolation. Unchanged by this phase and still
+  undiagnosed; the `survival.test.ts` fix does not touch it.
+- **No event hooks, no startup commands, no link handlers**, per the phase's "do NOT do"
+  list. The manifest reader parses and names them; nothing fires them. A plugin whose whole
+  behaviour is event hooks will install cleanly and do nothing, and the install preview
+  says so.
+- **No `plugin enable`/`disable`.** herdr has both. `plugin list --json` reports
+  `enabled: true` for anything whose files are present, so a script that filters on it
+  sees every plugin it can run rather than none.
+- **No plugin log.** herdr keeps a ring of command logs (`plugin log list`); an action's
+  output comes back to the caller here and is not retained.
+- **Windows is not supported**, per the phase and per PLAN.md. `windows` *parses* in a
+  manifest — refusing the word would make every cross-platform plugin uninstallable here —
+  and nothing declared `windows`-only is ever offered.
+- **Sidebar and preview cannot be visible at once**, and that is the largest remaining
+  shape difference from herdr-sidebar. Now an orphan in `PARITY.md` with a tabbed file
+  header beside it; neither is owned by a phase.
+- **Still no syntax highlighting.** Unchanged from phase 9: the dock paints its own styles
+  and cannot consume ANSI, so `bat` runs `--color=never`. It needs an ANSI-to-`Style`
+  parser, which is real work and not a renderer swap.
+- **`follow-pane` still does not work.** Named in phase 9 and in `PARITY.md`; nothing in
+  this phase touched `app.ts`'s geometry.
+- **Nothing has run against a real `rg`, `bat`, `glow` or `delta`.** Unchanged and still
+  the cheapest available coverage win — `brew install ripgrep bat glow git-delta`, then
+  re-run `daemon/src/preview.test.ts` and `client/test/search.test.ts`.
+- **`DaemonClient` still has no request timeout**, unchanged since phase 4.
+- **`bench/RESULTS.md` was not regenerated.** Phase 10 touched no render-path code — the
+  dock's only change is what a click means — so there was nothing to measure, and the
+  generator still silently destroys the hand-written sections. `git checkout --
+  bench/RESULTS.md` after any run. **Two handoffs have now said this; the fix is code.**
+- **Criterion 2 of phase 5 is still the important gap** — detection has never been checked
+  against a running agent, and three of six platform slots have never been built.
 
 ## Getting started in a new session
 
@@ -352,9 +418,22 @@ Things that contradicted a document or cost a wrong assumption first:
 pnpm install
 pnpm build
 ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus
-pnpm test                                    # 959 tests; do not run anything alongside it
-LEAP_CHORUS_DISABLE_SOUND=1 pnpm test        # the suite must not spawn afplay
-leap-chorus                                  # C-b g for source control, C-b e for the tree
-uptime && node bench/dist/render-scale.js --seconds 15   # alone, or the numbers are fiction
+pnpm test                                    # 1,389 tests; do not run anything alongside it
+leap-chorus                                  # C-b e files · C-b f search · C-b g git · 1/2/3/4
+
+# the plugin host
+leap-chorus plugin install smarzban/herdr-file-viewer --yes
+leap-chorus plugin list --json
+leap-chorus plugin verify
+leap-chorus plugin shim                      # what $HERDR_BIN_PATH points at
+leap-chorus plugin pane open --plugin herdr-file-viewer --entrypoint file-viewer
+
+# and what a plugin's own launcher does, by hand
+HERDR_BIN_PATH=$(leap-chorus plugin shim) \
+  bash ~/.leap-chorus/plugins/store/herdr-file-viewer/scripts/open-file-viewer.sh
+
+brew install ripgrep bat glow git-delta      # then re-run search and preview tests
+uptime && node bench/dist/render-scale.js --seconds 15
+git checkout -- bench/RESULTS.md             # THE BENCHMARK DESTROYS IT
 pgrep -f leap-chorusd                        # a leaked daemon forks `ps` every 750 ms
 ```

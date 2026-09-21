@@ -197,7 +197,16 @@ export function renderSidebar(
   palette: Palette,
   hits: HitRegions,
   /** Screen row the pointer is over, or -1. Only ever set when hover is enabled. */
-  hoverRow = -1
+  hoverRow = -1,
+  /**
+   * The sidebar is docked on the right, so its *inner* edge is its first column.
+   *
+   * The grip and the collapse arrow both live on the inner edge — the one the sidebar
+   * resizes and collapses towards. Hard-coding them to the last column was correct for
+   * as long as `x` was always 0, and became a grip on the screen's outer edge the moment
+   * `[sidebar] dock = "right"` existed.
+   */
+  dockRight = false
 ): void {
   buffer.fill(area, ' ', palette.sidebar)
   let y = area.y
@@ -289,19 +298,23 @@ export function renderSidebar(
   // The `«` sits at the bottom right, where herdr puts it: out of the way of the
   // list, and on the edge it collapses towards.
   const collapseY = area.y + area.height - 1
-  const collapseX = area.x + width - 2
+  const collapseX = dockRight ? area.x : area.x + width - 2
   if (collapseY > area.y) {
-    buffer.writeString(collapseX, collapseY, ' «', hovered(palette.sidebar, collapseY === hoverRow), area.x + width)
+    // The arrow points at the edge it collapses towards, which is the opposite one on
+    // each side.
+    const arrow = dockRight ? '» ' : ' «'
+    buffer.writeString(collapseX, collapseY, arrow, hovered(palette.sidebar, collapseY === hoverRow), area.x + width)
     hits.collapse = { x: collapseX, end: collapseX + 2, y: collapseY }
   }
-  // The grip: three cells at the vertical middle of the sidebar's last column. Short
+  // The grip: three cells at the vertical middle of the sidebar's inner column. Short
   // enough to be a target rather than an edge, long enough to find.
+  const gripX = dockRight ? area.x : area.x + width - 1
   const gripTop = area.y + Math.floor(area.height / 2) - 1
   for (let i = 0; i < 3; i++) {
     const gy = gripTop + i
     if (gy < area.y || gy >= area.y + area.height) continue
-    buffer.writeString(area.x + width - 1, gy, GRIP_VERTICAL, palette.idleBorder, area.x + width)
-    hits.grips.push({ x: area.x + width - 1, y: gy, kind: 'sidebar' })
+    buffer.writeString(gripX, gy, GRIP_VERTICAL, palette.idleBorder, gripX + 1)
+    hits.grips.push({ x: gripX, y: gy, kind: 'sidebar' })
   }
 }
 

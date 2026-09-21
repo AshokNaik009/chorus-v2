@@ -20,8 +20,8 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   AppState,
   RandomIds,
@@ -44,6 +44,7 @@ import type {
   WorkspaceRecord
 } from '@leap-chorus/protocol'
 import { AgentDetector, type HookReport, type PaneDetectionInput } from '@leap-chorus/detect'
+import { writeFileDurable } from './durable.js'
 import type { SessionManager } from './sessions.js'
 
 /** Size a pane's PTY is created at, before a client tells us its real geometry. */
@@ -506,8 +507,11 @@ export class SessionRuntime {
     }
 
     try {
-      mkdirSync(dirname(path), { recursive: true })
-      writeFileSync(path, text)
+      // Durable, and with a `.bak`. This file is the user's own — they typed most of it
+      // — and until this phase it was rewritten in place, so a kill between the
+      // truncate and the write left them with an empty config and every setting back at
+      // its default. See `durable.ts`.
+      writeFileDurable(path, text, { backup: true })
     } catch {
       return null
     }
@@ -540,13 +544,12 @@ export class SessionRuntime {
     const path = this.options.sessionPath
     if (path === undefined) return
     try {
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
       const body = `${JSON.stringify(serializeState(this.state), null, 2)}\n`
-      // Written to a sibling and renamed: a daemon killed mid-write must not leave a
-      // half-document where the session file was.
-      const temporary = `${path}.${process.pid}.tmp`
-      writeFileSync(temporary, body, { mode: 0o600 })
-      renameSync(temporary, path)
+      // Sibling, fsync, rename, fsync the directory. The first three were already here;
+      // the fsyncs are what stop a power loss from publishing an empty inode where the
+      // session file was — atomic for readers is not the same as durable. See
+      // `durable.ts`. No `.bak`: this file is rewritten every few seconds.
+      writeFileDurable(path, body, { mode: 0o600, dirMode: 0o700 })
     } catch {
       // Losing the session file costs the next restore, not this session.
     }

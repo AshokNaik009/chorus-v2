@@ -13,6 +13,22 @@ herdr. Apache-2.0 requires retaining the license text and attribution notices in
 derived files; herdr ships no NOTICE of its own, so reproducing its LICENSE here
 plus a provenance line in each derived file satisfies that.
 
+`packages/daemon/src/plugins/manifest.ts` ports the subset of herdr's
+`src/app/api/plugins/manifest.rs` this host honours: the `herdr-plugin.toml` key
+names and shapes, the id and platform validation, the duplicate-id rules and the
+error codes. `packages/daemon/src/plugins/install.ts` follows the install flow of
+`src/cli/plugin.rs` — `git init` / `remote add` / `fetch --depth 1` /
+`checkout --detach FETCH_HEAD`, the preview-then-confirm, the re-read of the
+manifest after the build, and the rename-with-rollback into the store. The output
+and concurrency caps in `packages/daemon/src/plugins/run.ts`
+(64 KiB, 32 in flight) are the constants from `src/app/api/plugins/runtime.rs`,
+and the environment variable names a plugin sees are those of
+`src/app/api/plugins/env.rs` and `panes.rs`.
+
+`packages/client/src/compat.ts` translates herdr's own CLI surface, so the
+commands and flags it accepts are herdr's from `src/cli/plugin.rs`. It is a
+compatibility shim and not a herdr binary; see PLAN.md's decision on that.
+
 The bundled notification sounds in `assets/sounds/` are herdr's
 (`assets/sounds/done.mp3`, `request.mp3`), used under the same licence.
 
@@ -23,6 +39,22 @@ Licensed under the MIT License.
 `packages/daemon/src/git.ts` ports that project's `src/git.rs` porcelain parsing:
 the status letter rules, rename-source handling, conflict set, and the branch and
 ahead/behind header parsing. Its MIT notice travels with that derivation.
+
+`packages/client/src/search.ts` takes that project's quick-open fuzzy ranking
+(`fuzzy_score_lowercased`), its search option set and key chords, and its result
+caps from `src/explorer_app.rs`; `packages/client/src/panel.ts` takes the
+activity bar and the view-switching rules from `src/ui.rs` and
+`src/explorer_app.rs`. `packages/daemon/src/search.ts` takes its caps and its
+bare-directory glob expansion (`build_search_globs`) from the same file.
+
+`packages/client/src/icons.ts` takes the extension-to-category table from
+`src/icons.rs`, reduced to the categories a thirty-four-column dock can distinguish;
+`packages/client/src/preview.ts` takes the Preview view's behaviour — the `w` wrap
+toggle, the scroll and pan keys — from `src/viewer.rs`, and none of its
+implementation. `packages/daemon/src/suggest.ts` ports the commit-drafting shape of
+`src/suggest.rs`, including its filename-based fallback for when no model is
+reachable. The `[sidebar]` settings in `packages/core/src/config.ts` follow that
+project's settings page.
 
 --------------------------------------------------------------------------------
 orca — Copyright (c) 2026 Lovecast Inc.
@@ -50,3 +82,17 @@ leap-chorus takes its runtime architecture from orca: the daemon/client split, P
 ownership by a detached versioned daemon, NDJSON framing over a unix socket, and
 the `@xterm/headless` emulator-per-pane approach. Files deriving from orca name it
 in a header comment.
+
+`packages/daemon/src/search.ts` additionally ports orca's ripgrep mechanics: the
+`--json` argv from `src/shared/text-search.ts`, the streamed `spawn` and its
+kill/settle rules from `src/relay/fs-handler-utils.ts`, the missing-versus-launch-
+failure classification from `src/shared/ripgrep-process-availability.ts`, the
+per-platform install line from `src/shared/quick-open-install-rg.ts`, and the
+match-centred line clipping from `src/shared/text-search-match-accumulator.ts`.
+
+`packages/daemon/src/preview.ts` takes the bounded-read mechanics from
+`src/shared/node-bounded-file-reader.ts` and `src/relay/fs-handler-utils.ts`: the
+probe byte past the stat size, the fixed-size binary prefix scan, and the rule that
+a non-integer limit is refused rather than read as "no limit".
+`packages/daemon/src/durable.ts` takes its write ordering — fsync the file, rename,
+then fsync the directory best-effort — from `src/main/durable-file-write.ts`.

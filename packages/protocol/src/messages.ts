@@ -42,6 +42,12 @@ import type {
   PaneSwapParams,
   PaneTargetParams,
   PaneZoomParams,
+  PluginActionInvokeParams,
+  PluginActionInvokeResult,
+  PluginListParams,
+  PluginListResult,
+  PluginPaneOpenParams,
+  PluginPaneOpenResult,
   ServerReloadConfigParams,
   ServerReloadConfigResult,
   StateGetResult,
@@ -59,12 +65,20 @@ import type {
   WorktreeListParams,
   FsListParams,
   FsListResult,
+  SearchContentParams,
+  SearchContentResult,
+  SearchFilesParams,
+  PreviewReadParams,
+  PreviewResult,
+  SearchFilesResult,
   GitBranchesResult,
   GitCheckoutParams,
   GitCommitParams,
   GitPathsParams,
   GitStatusParams,
   GitStatusResult,
+  GitSuggestParams,
+  GitSuggestResult,
   GitSyncResult,
   WorktreeListResult,
   WorktreeOpenParams,
@@ -415,6 +429,11 @@ export interface AgentMethodMap {
 
   'fs.list': { params: FsListParams; result: FsListResult }
 
+  'search.files': { params: SearchFilesParams; result: SearchFilesResult }
+  'search.content': { params: SearchContentParams; result: SearchContentResult }
+
+  'preview.read': { params: PreviewReadParams; result: PreviewResult }
+
   'git.status': { params: GitStatusParams; result: GitStatusResult }
   'git.stage': { params: GitPathsParams; result: GitStatusResult }
   'git.unstage': { params: GitPathsParams; result: GitStatusResult }
@@ -423,6 +442,7 @@ export interface AgentMethodMap {
   'git.branches': { params: GitStatusParams; result: GitBranchesResult }
   'git.checkout': { params: GitCheckoutParams; result: GitStatusResult }
   'git.sync': { params: GitStatusParams; result: GitSyncResult }
+  'git.suggest': { params: GitSuggestParams; result: GitSuggestResult }
 
   'worktree.list': { params: WorktreeListParams; result: WorktreeListResult }
   'worktree.create': { params: WorktreeCreateParams; result: WorktreeCreateResult }
@@ -431,6 +451,10 @@ export interface AgentMethodMap {
 
   'integration.list': { params: Record<string, never>; result: IntegrationListResult }
   'integration.install': { params: IntegrationInstallParams; result: IntegrationInstallResult }
+
+  'plugin.list': { params: PluginListParams; result: PluginListResult }
+  'plugin.pane.open': { params: PluginPaneOpenParams; result: PluginPaneOpenResult }
+  'plugin.action.invoke': { params: PluginActionInvokeParams; result: PluginActionInvokeResult }
 }
 
 /** The PHASE-5 methods, as a value, so a test can assert none is missing. */
@@ -442,6 +466,9 @@ export const AGENT_METHODS = [
   'config.set_theme',
   'config.set',
   'fs.list',
+  'search.files',
+  'search.content',
+  'preview.read',
   'git.status',
   'git.stage',
   'git.unstage',
@@ -450,12 +477,16 @@ export const AGENT_METHODS = [
   'git.branches',
   'git.checkout',
   'git.sync',
+  'git.suggest',
   'worktree.list',
   'worktree.create',
   'worktree.open',
   'worktree.remove',
   'integration.list',
-  'integration.install'
+  'integration.install',
+  'plugin.list',
+  'plugin.pane.open',
+  'plugin.action.invoke'
 ] as const satisfies readonly (keyof AgentMethodMap)[]
 
 /** The 28 PHASE-4 methods, as a value, so a test can assert none is missing. */
@@ -583,6 +614,13 @@ export const ErrorCodes = {
   notARepository: 'leap_chorus_not_a_repository',
   /** `git` refused. The message carries git's own stderr, which is the useful part. */
   gitFailed: 'leap_chorus_git_failed',
+  /**
+   * A search could not run at all: no ripgrep, or ripgrep would not start.
+   *
+   * Separate from `badRequest` because the message is advice rather than a complaint —
+   * it names the install command for this platform, and the panel prints it verbatim.
+   */
+  searchUnavailable: 'leap_chorus_search_unavailable',
   /** An integration could not be written: no settings file, no permission, no agent. */
   integrationFailed: 'leap_chorus_integration_failed',
   internal: 'leap_chorus_internal_error'

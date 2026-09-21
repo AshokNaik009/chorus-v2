@@ -207,6 +207,15 @@ export interface TabCreateParams {
   readonly label?: string
   readonly focus?: boolean
   readonly env?: Readonly<Record<string, string>>
+  /**
+   * What the tab's first pane runs. Absent means the configured shell.
+   *
+   * `workspace.create` has had this since phase 4 and `pane.split` since before that;
+   * `tab.create` did not, and a plugin whose manifest asks for `placement = "tab"` has
+   * nowhere to put its argv without it. Same shape as the other two, deliberately.
+   */
+  readonly command?: string
+  readonly args?: readonly string[]
 }
 export interface TabTargetParams {
   readonly tabId: string
@@ -691,4 +700,302 @@ export interface ConfigSetParams {
 export interface ConfigSetResult {
   readonly path: string | null
   readonly config: unknown
+}
+
+// ---------------------------------------------------------------------------
+// Search (quick open and content search)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which cap stopped a search, or null when nothing did.
+ *
+ * Reported rather than inferred. A client cannot tell a complete result from a capped
+ * one by counting — 1,000 matches is a plausible honest answer — so the daemon says
+ * which bound it hit, and the panel says so on screen.
+ */
+export type SearchCap = 'matches' | 'files' | 'time'
+
+/** Where a file list came from. `git` is the no-ripgrep fallback; see `search.ts`. */
+export type SearchEngine = 'ripgrep' | 'git'
+
+export type SearchFilesParams = GitTargetParams
+
+export interface SearchFilesResult {
+  /** The root the paths are relative to, absolute and real. */
+  readonly root: string
+  /** Repo-relative, `/`-separated, sorted case-insensitively. */
+  readonly files: readonly string[]
+  readonly truncated: boolean
+  readonly cap: SearchCap | null
+  readonly engine: SearchEngine
+}
+
+export interface SearchContentParams extends GitTargetParams {
+  readonly query: string
+  /** Default false: a search nobody configured is case-insensitive, as in VS Code. */
+  readonly matchCase?: boolean
+  readonly wholeWord?: boolean
+  readonly regex?: boolean
+  /** Comma-separated globs. Empty means no restriction. */
+  readonly include?: string
+  readonly exclude?: string
+}
+
+/**
+ * One matching line.
+ *
+ * `column` and `matchLength` are the **true** position in the file's line;
+ * `displayColumn` and `displayMatchLength` index into `text`, which may be a window
+ * clipped around the match. Keeping the two apart is what lets a 200 KB minified line
+ * show something useful and still open at the right place.
+ */
+export interface SearchMatch {
+  /** 1-based, as every editor and pager counts them. */
+  readonly line: number
+  /** 1-based column in the untruncated line. */
+  readonly column: number
+  readonly matchLength: number
+  /** The line, possibly windowed around the match and marked with `…`. */
+  readonly text: string
+  readonly displayColumn: number
+  readonly displayMatchLength: number
+}
+
+export interface SearchFileMatches {
+  /** Repo-relative, `/`-separated. */
+  readonly path: string
+  readonly matches: readonly SearchMatch[]
+}
+
+export interface SearchContentResult {
+  readonly root: string
+  /** Grouped by file, in the order ripgrep reported them. */
+  readonly files: readonly SearchFileMatches[]
+  readonly totalMatches: number
+  readonly truncated: boolean
+  readonly cap: SearchCap | null
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+// ---------------------------------------------------------------------------
+
+/**
+ * What produced a preview's lines.
+ *
+ * `plain` is the daemon's own decoding, and is always available. The other three are
+ * programs the user installed; the panel names whichever ran, because "this is glow's
+ * idea of the file" and "these are the bytes" are different claims about what is on
+ * screen.
+ */
+export type PreviewRenderer = 'plain' | 'bat' | 'glow' | 'delta'
+
+/** Which bound stopped a preview, or null when nothing did. */
+export type PreviewCap = 'bytes' | 'lines'
+
+export interface PreviewReadParams extends GitTargetParams {
+  /** Root-relative, `/`-separated — the same path the explorer and search hand around. */
+  readonly path: string
+  /** The dock's width, so a renderer that reflows reflows to the right number. */
+  readonly width?: number
+}
+
+export interface PreviewResult {
+  /** Echoed back, so a late reply for a file the cursor has left can be discarded. */
+  readonly path: string
+  readonly renderer: PreviewRenderer
+  /** Already split; no line ends with a newline. Empty when `binary`. */
+  readonly lines: readonly string[]
+  /**
+   * The file is binary and was not rendered.
+   *
+   * Decided from a bounded prefix, never from the whole file — see `preview.ts`. The
+   * panel says so rather than painting the bytes, because a terminal handed arbitrary
+   * bytes does arbitrary things to its own state.
+   */
+  readonly binary: boolean
+  readonly truncated: boolean
+  readonly cap: PreviewCap | null
+  /** The file's size in bytes, so the panel can say how much it is not showing. */
+  readonly size: number
+}
+
+// ---------------------------------------------------------------------------
+// Commit-message drafting
+// ---------------------------------------------------------------------------
+
+/** Where a draft came from. `filenames` is the offline fallback and needs no model. */
+export type SuggestSource = 'claude' | 'filenames'
+
+export interface GitSuggestParams extends GitTargetParams {
+  /**
+   * Try the local `claude` CLI.
+   *
+   * Sent only when `[sidebar] ai-commit` is on, which is off by default. Absent or
+   * false means the daemon starts no subprocess and reads nothing but the status — the
+   * draft is written from the staged filenames, offline.
+   */
+  readonly ai?: boolean
+}
+
+export interface GitSuggestResult {
+  readonly message: string
+  readonly source: SuggestSource
+  /**
+   * Why the model was not used, when it was asked for and did not run.
+   *
+   * A draft that fell back is still a draft, so this travels beside a usable message
+   * rather than in place of one.
+   */
+  readonly note: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Plugins
+// ---------------------------------------------------------------------------
+
+/**
+ * The platform names a `herdr-plugin.toml` may use.
+ *
+ * `windows` is accepted because herdr manifests write it and refusing to *parse* a
+ * manifest over a platform we do not run on would make every cross-platform plugin
+ * uninstallable here. Nothing declared `windows`-only is ever offered; see
+ * `plugins/manifest.ts`.
+ */
+export type PluginPlatform = 'linux' | 'macos' | 'windows'
+
+/** The placements this host can actually produce. */
+export type PluginPlacement = 'split' | 'tab'
+
+/**
+ * Every placement herdr's manifest can name.
+ *
+ * `overlay`, `popup` and `zoomed` have no counterpart here — this multiplexer has one
+ * kind of pane, and PHASE-10 says not to grow a second. They parse, they fall back to
+ * `split`, and the fallback is reported rather than hidden.
+ */
+export type PluginDeclaredPlacement = 'overlay' | 'popup' | 'split' | 'tab' | 'zoomed'
+
+/** Where an entrypoint came from in the manifest. */
+export type PluginEntrypointKind = 'pane' | 'action'
+
+export interface PluginEntrypointInfo {
+  readonly id: string
+  readonly title: string
+  readonly description: string | null
+  readonly kind: PluginEntrypointKind
+  /** What we will do. */
+  readonly placement: PluginPlacement
+  /** What the manifest asked for, when that is not what we will do. */
+  readonly placementFallbackFrom: PluginDeclaredPlacement | null
+  /** argv. Never run through a shell. */
+  readonly command: readonly string[]
+  /** Empty means every platform. */
+  readonly platforms: readonly PluginPlatform[]
+}
+
+/**
+ * What an install was pinned to.
+ *
+ * `contentHash` is over the fetched source tree, before the build ran — build output is
+ * machine-specific and hashing it would make every re-install look tampered with. It is
+ * the answer to "are these the same bytes I approved?", and `plugin verify` re-computes
+ * it against what is on disk now.
+ */
+export interface PluginPin {
+  /** `owner/repo[/subdir]`, or a local path, as the user typed it. */
+  readonly source: string
+  /** The ref asked for, or null when the remote's default HEAD was taken. */
+  readonly ref: string | null
+  /** The commit that ref resolved to. */
+  readonly commit: string
+  /** `sha256:<hex>` over the source tree, `.git` excluded. */
+  readonly contentHash: string
+}
+
+export interface InstalledPluginInfo {
+  readonly id: string
+  readonly name: string
+  readonly version: string
+  readonly description: string | null
+  /** The directory the manifest sits in; `HERDR_PLUGIN_ROOT`. */
+  readonly root: string
+  readonly manifestPath: string
+  readonly configDir: string
+  readonly stateDir: string
+  readonly platforms: readonly PluginPlatform[]
+  readonly entrypoints: readonly PluginEntrypointInfo[]
+  /** Manifest keys that parsed and are deliberately not honoured, named one by one. */
+  readonly ignored: readonly string[]
+  readonly pin: PluginPin
+  /**
+   * `sha256:<hex>` over the store directory as it stood the moment the install finished.
+   *
+   * Distinct from `pin.contentHash`, and the difference matters: the pin is over the
+   * *fetched source*, so it answers "did the remote hand me the same bytes as last
+   * time?", while this is over the *built tree*, so it answers "has anything changed
+   * under my feet since?". Hashing one thing for both questions would make every
+   * plugin with a build step look tampered with the instant it was installed.
+   */
+  readonly installedHash: string
+  readonly installedAt: number
+  /** The recorded root is gone from disk. The entry is still listed, and says so. */
+  readonly missing: boolean
+}
+
+export interface PluginListParams {
+  readonly pluginId?: string
+}
+
+export interface PluginListResult {
+  readonly plugins: readonly InstalledPluginInfo[]
+  /** What `$HERDR_BIN_PATH` is set to for a plugin's own children. */
+  readonly shimPath: string
+}
+
+export interface PluginPaneOpenParams {
+  readonly pluginId: string
+  /** Absent means the plugin's only entrypoint, and is an error when it has several. */
+  readonly entrypointId?: string
+  /** Overrides the manifest's placement. */
+  readonly placement?: PluginPlacement
+  readonly targetPaneId?: string
+  readonly direction?: WireSplitDirection
+  readonly cwd?: string
+  readonly focus?: boolean
+  readonly env?: Readonly<Record<string, string>>
+}
+
+export interface PluginPaneOpenResult {
+  readonly pluginId: string
+  readonly entrypointId: string
+  readonly paneId: string
+  readonly tabId: string | null
+  readonly placement: PluginPlacement
+  /**
+   * The pane was already open and was focused instead of opened again.
+   *
+   * One entrypoint has one live pane, wherever it is — a second open focuses it rather
+   * than splitting a second copy of the same viewer next to the first.
+   */
+  readonly reused: boolean
+  readonly placementFallbackFrom: PluginDeclaredPlacement | null
+}
+
+export interface PluginActionInvokeParams {
+  readonly pluginId: string
+  readonly actionId: string
+  readonly cwd?: string
+}
+
+export interface PluginActionInvokeResult {
+  readonly pluginId: string
+  readonly actionId: string
+  readonly code: number | null
+  readonly signal: string | null
+  readonly stdout: string
+  readonly stderr: string
+  /** Output passed the cap and the rest was dropped. It was never buffered. */
+  readonly truncated: boolean
+  readonly timedOut: boolean
 }

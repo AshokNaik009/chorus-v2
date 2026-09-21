@@ -27,7 +27,33 @@ export function tempDataRoot(): string {
 export function cleanupDataRoots(): void {
   while (created.length > 0) {
     const root = created.pop()
-    if (root) rmSync(root, { recursive: true, force: true })
+    if (root !== undefined) removeWithRetry(root)
+  }
+}
+
+/**
+ * `rmSync` is not atomic, and these directories can still have a process in them.
+ *
+ * `force: true` swallows "it was not there"; it does nothing about "somebody put a file
+ * back while I was walking the tree", which is what a daemon writing its session file
+ * every few seconds does. The result is `ENOTEMPTY` on the final `rmdir` — a teardown
+ * failure that fails the *test*, which is how a documented flake ends up looking like a
+ * product bug. The daemon is stopped and waited for before this runs; this is the
+ * backstop for the case where stopping it timed out.
+ *
+ * Synchronous on purpose: every caller is an `afterEach`/`afterAll` that does not await,
+ * and `Atomics.wait` sleeps the thread rather than spinning it.
+ */
+function removeWithRetry(root: string, attempts = 5): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      rmSync(root, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (attempt >= attempts - 1 || (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM')) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1))
+    }
   }
 }
 
@@ -73,12 +99,21 @@ export async function startDetachedDaemon(paths: DaemonPaths = testPaths()): Pro
           // Already gone.
         }
       }
-      await waitUntil(() => !isProcessAlive(pid), `daemon ${pid} did not exit`, 5_000).catch(() => {
+      await waitUntil(() => !isProcessAlive(pid), `daemon ${pid} did not exit`, 5_000).catch(async () => {
         try {
           process.kill(pid, 'SIGKILL')
         } catch {
           // Already gone.
         }
+        // And *wait* for it. Returning here used to hand control back while the daemon
+        // was still running, so `cleanupDataRoots` would start deleting the data root
+        // out from under a live process that was still writing its session file — which
+        // is where `survival.test.ts`'s long-standing
+        // `ENOTEMPTY: directory not empty, rmdir …/daemon` came from. SIGKILL is not
+        // instantaneous, and under load it is not close to it.
+        await waitUntil(() => !isProcessAlive(pid), `daemon ${pid} survived SIGKILL`, 5_000).catch(() => {
+          // Nothing else to try. The retry in `cleanupDataRoots` is the backstop.
+        })
       })
     }
   }

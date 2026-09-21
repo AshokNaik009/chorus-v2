@@ -74,6 +74,82 @@ export interface UiConfig {
   readonly paneButtons: 'icons' | 'ascii' | 'off'
 }
 
+/**
+ * Where the dock sits, what it draws with, and what it does on its own.
+ *
+ * herdr-sidebar's settings page, reduced to what a docked column in a multiplexer can
+ * honour. Everything here is a *presentation* choice, which is why it lives in the
+ * config file and never on the wire: a second client attached to the same session may
+ * be a different width, on a different terminal, with a different font.
+ */
+export interface SidebarConfig {
+  /**
+   * Which side of the screen the dock takes.
+   *
+   * Left by default, as in VS Code and as the panel was hard-coded before. Right is not
+   * cosmetic for everyone: a dock on the side your eye already rests on is the
+   * difference between glancing at a file tree and turning your head to it.
+   */
+  readonly dock: 'left' | 'right'
+  /**
+   * Show the Explorer and Source Control as one scrolling column, or as two views.
+   *
+   * `separate` — the default and what phases 7-8 shipped — is the activity bar: three
+   * views, one on screen at a time. `unified` stacks the tree and the changes list in
+   * one view the way VS Code's Explorer stacks its sections, which is worth having when
+   * the dock is tall and worth nothing when it is not.
+   */
+  readonly layout: 'separate' | 'unified'
+  /**
+   * The glyph set.
+   *
+   * **`ascii` is the default and stays there unless asked**, and the reason is not
+   * aesthetic. Nerd Font glyphs live in the Private Use Area; `codePointWidth` measures
+   * a Private Use code point as one column, and a terminal or font that draws it as two
+   * shifts every column after it — taking the mouse hit regions with it. That is the
+   * same failure `ui.pane-buttons = ascii` already exists to escape. `emoji` is
+   * honestly two columns wide and is measured as two; `nerd` is the one that requires
+   * the user to know their font.
+   */
+  readonly icons: 'ascii' | 'emoji' | 'nerd'
+  /**
+   * Show a one-line branch and sync summary in every view, not just Source Control.
+   *
+   * herdr-sidebar calls this its Git footer. The argument for it is that the two facts
+   * worth knowing continuously — which branch, and whether you are behind — are the
+   * ones you currently have to switch view to see.
+   */
+  readonly gitFooter: boolean
+  /**
+   * Follow the focused pane's directory, or stay where you put it.
+   *
+   * On by default, because following the pane is what makes the dock part of the
+   * multiplexer rather than a second window. Off pins the dock to whatever root it had
+   * when you turned it off, which is what you want while reading one repository and
+   * working in another.
+   */
+  readonly followPane: boolean
+  /** Open the dock on the view it was last showing, rather than the Explorer. */
+  readonly rememberView: boolean
+  /**
+   * Preview a file in the dock on `⏎`, instead of opening `$PAGER` in a new pane.
+   *
+   * Off by default, deliberately. Three phases of this port have delegated reading to
+   * tools the user already configured, and the embedded preview is for *glancing* — it
+   * has no search, no syntax theme of the user's choosing, and thirty-four columns.
+   * Turning it on is a statement that you want the glance.
+   */
+  readonly preview: boolean
+  /**
+   * Draft a commit message with the local `claude` CLI when `A` is pressed.
+   *
+   * Off by default and opt-in for one reason: it is the only thing in this project that
+   * can send the contents of your working tree anywhere. With it off, `A` still drafts
+   * — from the filenames, offline, exactly as `suggest.rs`'s own fallback does.
+   */
+  readonly aiCommit: boolean
+}
+
 export interface ThemeConfig {
   readonly focusBorder: number
   readonly idleBorder: number
@@ -146,6 +222,7 @@ export interface Config {
   readonly sound: SoundConfig
   readonly general: GeneralConfig
   readonly ui: UiConfig
+  readonly sidebar: SidebarConfig
   readonly theme: ThemeConfig
   readonly keys: KeysConfig
 }
@@ -193,6 +270,10 @@ export const DEFAULT_PREFIX_BINDINGS: Readonly<Record<string, string>> = {
   // `g` for git, as in herdr-sidebar's Source Control view.
   g: 'client.source-control',
   e: 'client.explorer',
+  // `f` for find, the third of the sidebar's views. herdr-sidebar reaches it with
+  // Ctrl+F, which is also bound — but only inside the panel, where it is not a key
+  // the shell behind it wanted.
+  f: 'client.search',
   d: 'client.detach',
   q: 'client.quit',
   r: 'client.repaint',
@@ -207,6 +288,19 @@ export const DEFAULT_CONFIG: Config = {
   sound: { agentDone: true, agentBlocked: true, donePath: '', blockedPath: '' },
   general: { shell: '', cwd: '', scrollback: 5000, mouse: true, mouseHover: true, scrollStep: 0 },
   ui: { sidebar: true, sidebarWidth: 22, tabBar: true, statusBar: true, paneBorders: true, paneButtons: 'icons' },
+  // Every default here is the behaviour phases 7 and 8 already shipped, so a user who
+  // never opens the dialog sees no change at all. `icons: 'ascii'` is the one that is a
+  // decision rather than an inheritance; see `SidebarConfig`.
+  sidebar: {
+    dock: 'left',
+    layout: 'separate',
+    icons: 'ascii',
+    gitFooter: false,
+    followPane: true,
+    rememberView: false,
+    preview: false,
+    aiCommit: false
+  },
   theme: {
     focusBorder: 6,
     idleBorder: 8,
@@ -237,6 +331,16 @@ export const DEFAULT_CONFIG: Config = {
 type Scalar =
   | { readonly kind: 'boolean' }
   | { readonly kind: 'string' }
+  /**
+   * A string from a fixed set.
+   *
+   * `ui.pane-buttons` has been a bare `string` since phase 4, which means
+   * `pane-buttons = "sideway"` validated cleanly and then fell through every branch of
+   * the renderer to whatever the last `else` happened to be. The `[sidebar]` keys this
+   * phase adds are all of that shape and all reachable from a dialog, so the set is
+   * declared and the problem names the alternatives.
+   */
+  | { readonly kind: 'enum'; readonly values: readonly string[] }
   | { readonly kind: 'integer'; readonly min?: number; readonly max?: number }
   | { readonly kind: 'chord' }
 
@@ -277,7 +381,20 @@ const SCHEMA: readonly TableSpec[] = [
       { key: 'tab-bar', kind: 'boolean' },
       { key: 'status-bar', kind: 'boolean' },
       { key: 'pane-borders', kind: 'boolean' },
-      { key: 'pane-buttons', kind: 'string' }
+      { key: 'pane-buttons', kind: 'enum', values: ['icons', 'ascii', 'off'] }
+    ]
+  },
+  {
+    key: 'sidebar',
+    fields: [
+      { key: 'dock', kind: 'enum', values: ['left', 'right'] },
+      { key: 'layout', kind: 'enum', values: ['separate', 'unified'] },
+      { key: 'icons', kind: 'enum', values: ['ascii', 'emoji', 'nerd'] },
+      { key: 'git-footer', kind: 'boolean' },
+      { key: 'follow-pane', kind: 'boolean' },
+      { key: 'remember-view', kind: 'boolean' },
+      { key: 'preview', kind: 'boolean' },
+      { key: 'ai-commit', kind: 'boolean' }
     ]
   },
   {
@@ -337,6 +454,14 @@ const FIELD_PATHS: Readonly<Record<string, [keyof Config, string] | [keyof Confi
   'ui.status-bar': ['ui', 'statusBar'],
   'ui.pane-borders': ['ui', 'paneBorders'],
   'ui.pane-buttons': ['ui', 'paneButtons'],
+  'sidebar.dock': ['sidebar', 'dock'],
+  'sidebar.layout': ['sidebar', 'layout'],
+  'sidebar.icons': ['sidebar', 'icons'],
+  'sidebar.git-footer': ['sidebar', 'gitFooter'],
+  'sidebar.follow-pane': ['sidebar', 'followPane'],
+  'sidebar.remember-view': ['sidebar', 'rememberView'],
+  'sidebar.preview': ['sidebar', 'preview'],
+  'sidebar.ai-commit': ['sidebar', 'aiCommit'],
   'theme.focus-border': ['theme', 'focusBorder'],
   'theme.idle-border': ['theme', 'idleBorder'],
   'theme.pane-title': ['theme', 'paneTitle'],
@@ -368,7 +493,14 @@ const FIELD_PATHS: Readonly<Record<string, [keyof Config, string] | [keyof Confi
 // Validation
 // ---------------------------------------------------------------------------
 
-export type ConfigProblemKind = 'unknown-key' | 'wrong-type' | 'out-of-range' | 'unknown-command' | 'bad-chord'
+export type ConfigProblemKind =
+  | 'unknown-key'
+  | 'wrong-type'
+  | 'out-of-range'
+  | 'unknown-command'
+  | 'bad-chord'
+  /** A string key whose value is not one of the ones it accepts. */
+  | 'bad-value'
 
 export interface ConfigProblem {
   readonly kind: ConfigProblemKind
@@ -506,6 +638,23 @@ function applyField(
       }
       table[field_key] = raw
       return
+    case 'enum':
+      if (typeof raw !== 'string') {
+        problems.push({ kind: 'wrong-type', path, message: `\`${path}\` must be a string` })
+        return
+      }
+      if (!field.values.includes(raw)) {
+        problems.push({
+          kind: 'bad-value',
+          path,
+          // The alternatives, not just the rejection: a config key with three legal
+          // values should never make somebody go and find the documentation.
+          message: `\`${path}\` must be one of ${field.values.map((value) => `"${value}"`).join(', ')}, got "${raw}"`
+        })
+        return
+      }
+      table[field_key] = raw
+      return
     case 'chord':
       if (typeof raw !== 'string' || !looksLikeChord(raw)) {
         problems.push({ kind: 'bad-chord', path, message: `\`${path}\` must be a chord such as "C-b"` })
@@ -541,6 +690,7 @@ function structuredCopy(config: Config): Config {
     sound: { ...config.sound },
     general: { ...config.general },
     ui: { ...config.ui },
+    sidebar: { ...config.sidebar },
     theme: { ...config.theme },
     keys: {
       prefix: config.keys.prefix,

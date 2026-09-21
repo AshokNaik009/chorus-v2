@@ -1,4 +1,32 @@
-# Phase 9 — Preview, icons, and settings
+# Phase 9 — Preview, icons, and settings ✅ **COMPLETE**
+
+**Status: shipped 2026-09-21.** All 10 criteria met; see `../HANDOFF.md`, which is
+this phase's handoff and is the authority on what landed, what it cost, and what
+it deliberately did not do.
+
+**Do not re-run this phase.** What is kept below is the original plan, because two
+of its judgements turned out to be worth arguing with and the record of that is
+the useful part:
+
+- **"Six of the eight remaining orphans also land here, which may well make this
+  phase too big."** It did not. Four of the six were an afternoon each once the
+  `[sidebar]` block existed, because every one of them was a *setting* plus a
+  place to read it. The fifth (the ephemeral preview tab) was closed as a
+  divergence rather than built, and the sixth (`follow-pane`) is half-built and
+  named in `PARITY.md` so it cannot go back to being an orphan.
+- **"Reconsider `git grep` here, or close it."** Closed, and the thread is dead.
+  Nobody hit the missing-`rg` message, because nothing in this phase needed
+  content search — and the argument against has not changed: two engines with
+  different regex dialects make results differ by machine. See the handoff.
+
+**One thing this phase inherited and the plan does not mention:** PHASE-7's three
+follow-ups against `worktree.ts` — the credential prompt, the locale, and
+`GIT_OPTIONAL_LOCKS` — were still open, because phase 8 never touched that file.
+PHASE-7 said to do them "as part of phase 8 or 9, whichever touches the file".
+Phase 9 touched it. They are done, with `packages/daemon/src/git-env.test.ts`.
+
+---
+
 
 **Read `../PLAN.md`, `../HANDOFF.md` and `PARITY.md` first.**
 

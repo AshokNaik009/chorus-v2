@@ -18,10 +18,10 @@
 
 import { existsSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { ErrorCodes, type GitBranch } from '@leap-chorus/protocol'
 import { RequestError } from './rpc/params.js'
-import { canonicalPath, runGit, type GitRunner } from './worktree.js'
+import { canonicalPath, gitBufferOverflowMessage, runGit, type GitRunner } from './worktree.js'
 
 /** One changed path, on one side of the index. */
 export interface GitFileEntry {
@@ -187,15 +187,18 @@ export function under(path: string, prefix: string | undefined): boolean {
  * moving a file out of a directory is a change to that directory.
  */
 export function pathsUnder(entries: readonly GitFileEntry[], prefix: string | undefined): string[] {
-  const out: string[] = []
+  // A `Set`, not an array with `includes`. Staging a whole repository expands the
+  // untracked side into every path under it, and a linear membership test on each one
+  // makes that quadratic — thousands of files become millions of comparisons before
+  // the first `git add` runs. Insertion order is irrelevant; the result is sorted.
+  const out = new Set<string>()
   for (const entry of entries) {
     const originUnder = entry.origin !== null && under(entry.origin, prefix)
     if (!under(entry.path, prefix) && !originUnder) continue
-    for (const path of entry.origin === null ? [entry.path] : [entry.path, entry.origin]) {
-      if (!out.includes(path)) out.push(path)
-    }
+    out.add(entry.path)
+    if (entry.origin !== null) out.add(entry.origin)
   }
-  return out.sort()
+  return [...out].sort()
 }
 
 /**
@@ -271,6 +274,21 @@ function lastLine(result: { stdout: string; stderr: string }): string {
   return ''
 }
 
+/**
+ * What to tell the user about a git command that exited non-zero.
+ *
+ * git's own stderr wherever there is any, because it is always more specific than
+ * anything this file could write. The exception is the one failure that leaves stderr
+ * *empty*: `execFile` killing the child at `maxBuffer`. PHASE-7 measured that case here
+ * — a repository emitting more than 8 MB of status reported as the bare words "git
+ * status failed", which describes nothing and suggests a retry that cannot work.
+ */
+function failureMessage(result: { stderr: string; overflowed?: boolean }, what: string): string {
+  const said = result.stderr.trim()
+  if (said.length > 0) return said
+  return result.overflowed === true ? gitBufferOverflowMessage(what) : `${what} failed`
+}
+
 export interface GitServiceOptions {
   readonly git?: GitRunner
 }
@@ -307,7 +325,7 @@ export class GitService {
       root
     )
     if (result.code !== 0) {
-      throw new RequestError(ErrorCodes.gitFailed, result.stderr.trim() || 'git status failed')
+      throw new RequestError(ErrorCodes.gitFailed, failureMessage(result, 'git status'))
     }
     return parseStatus(result.stdout, root)
   }
@@ -334,18 +352,18 @@ export class GitService {
     const root = await this.repoRoot(cwd)
     const status = await this.status(root)
     const targets: (string | undefined)[] = paths.length === 0 ? [undefined] : [...paths]
-    const candidates: string[] = []
+    // Set-backed for the reason `pathsUnder` gives: `paths` can be every directory in
+    // the tree and each expansion can be every file under it.
+    const seen = new Set<string>()
     for (const target of targets) {
-      for (const path of pathsUnder(status.unstaged, target)) {
-        if (!candidates.includes(path)) candidates.push(path)
-      }
+      for (const path of pathsUnder(status.unstaged, target)) seen.add(path)
     }
-    for (const path of await this.decomposedRenamePartners(root, status, candidates)) {
-      if (!candidates.includes(path)) candidates.push(path)
-    }
-    const kept = dropNested(candidates, this.nestedRootsFor(root, candidates))
+    const candidates = [...seen]
+    for (const path of await this.decomposedRenamePartners(root, status, candidates)) seen.add(path)
+    const all = [...seen]
+    const kept = dropNested(all, this.nestedRootsFor(root, all))
     if (kept.length === 0) {
-      if (candidates.length > 0) {
+      if (all.length > 0) {
         // Silence here would look like a broken keystroke: the row stays where it was
         // and nothing says why. Selecting something *inside* the nested repository
         // stages it there, which is the route that works.
@@ -387,12 +405,13 @@ export class GitService {
     status: GitStatus,
     targets: readonly string[]
   ): Promise<string[]> {
+    const selected = new Set(targets)
     const untracked = status.unstaged.filter((entry) => entry.letter === 'U').map((entry) => entry.path)
     const deleted = status.unstaged.filter((entry) => entry.letter === 'D').map((entry) => entry.path)
     // Nothing to pair unless the selection reaches one kind and leaves some of the other
     // behind. This is the early exit that keeps an ordinary stage at one `git add`.
-    const wantDeleted = untracked.some((path) => targets.includes(path)) && deleted.some((path) => !targets.includes(path))
-    const wantUntracked = deleted.some((path) => targets.includes(path)) && untracked.some((path) => !targets.includes(path))
+    const wantDeleted = untracked.some((path) => selected.has(path)) && deleted.some((path) => !selected.has(path))
+    const wantUntracked = deleted.some((path) => selected.has(path)) && untracked.some((path) => !selected.has(path))
     if (!wantDeleted && !wantUntracked) return []
 
     const [byUntracked, byDeleted] = await Promise.all([
@@ -400,10 +419,10 @@ export class GitService {
       this.indexBlobs(root, deleted)
     ])
     const partners: string[] = []
-    const pair = (from: Map<string, string>, to: Map<string, string>, selected: boolean): void => {
+    const pair = (from: Map<string, string>, to: Map<string, string>, wanted: boolean): void => {
       for (const [path, hash] of from) {
-        if (targets.includes(path) !== selected || hash === EMPTY_BLOB) continue
-        const matches = [...to].filter(([other, otherHash]) => otherHash === hash && !targets.includes(other))
+        if (selected.has(path) !== wanted || hash === EMPTY_BLOB) continue
+        const matches = [...to].filter(([other, otherHash]) => otherHash === hash && !selected.has(other))
         if (matches.length !== 1) continue
         const only = matches[0]
         if (only !== undefined) partners.push(only[0])
@@ -509,13 +528,11 @@ export class GitService {
    * would quietly reset the entire index instead.
    */
   private unstageTargets(status: GitStatus, paths: readonly string[]): string[] {
-    const out: string[] = []
+    const out = new Set<string>()
     for (const path of paths) {
-      for (const resolved of pathsUnder(status.staged, path)) {
-        if (!out.includes(resolved)) out.push(resolved)
-      }
+      for (const resolved of pathsUnder(status.staged, path)) out.add(resolved)
     }
-    return out.length === 0 ? [...paths] : out
+    return out.size === 0 ? [...paths] : [...out]
   }
 
   /**
@@ -545,7 +562,11 @@ export class GitService {
       // Resolved against the root and checked, so a path from a stale client cannot
       // reach outside the repository.
       const full = canonicalPath(join(root, path))
-      if (!full.startsWith(root)) {
+      // `startsWith(root)` alone is not containment: for a root of `/tmp/repo` it also
+      // accepts `/tmp/repo-evil/x`. Every path reaching here came from git's own status
+      // and so cannot be either, which is exactly why the guard has to be right — it
+      // exists for the case where that stops being true.
+      if (full !== root && !full.startsWith(`${root}${sep}`)) {
         throw new RequestError(ErrorCodes.badRequest, `path escapes the repository: ${path}`)
       }
       await rm(full, { recursive: true, force: true })
@@ -590,7 +611,7 @@ export class GitService {
       root
     )
     if (result.code !== 0) {
-      throw new RequestError(ErrorCodes.gitFailed, result.stderr.trim() || 'git for-each-ref failed')
+      throw new RequestError(ErrorCodes.gitFailed, failureMessage(result, 'git for-each-ref'))
     }
     return { root, branches: parseBranches(result.stdout) }
   }
@@ -639,12 +660,12 @@ export class GitService {
     if (pull.code !== 0) {
       throw new RequestError(
         ErrorCodes.gitFailed,
-        pull.stderr.trim() || pull.stdout.trim() || 'git pull --rebase --autostash failed'
+        pull.stderr.trim() || pull.stdout.trim() || failureMessage(pull, 'git pull --rebase --autostash')
       )
     }
     const push = await this.git(['push'], root)
     if (push.code !== 0) {
-      throw new RequestError(ErrorCodes.gitFailed, push.stderr.trim() || 'git push failed')
+      throw new RequestError(ErrorCodes.gitFailed, failureMessage(push, 'git push'))
     }
     // The last line of each, which is where git puts the conclusion: "Successfully
     // rebased…", "Already up to date.", "abc..def main -> main". The lines above it
@@ -656,7 +677,7 @@ export class GitService {
   private async mutate(root: string, args: readonly string[]): Promise<void> {
     const result = await this.git(args, root)
     if (result.code !== 0) {
-      throw new RequestError(ErrorCodes.gitFailed, result.stderr.trim() || `git ${args[0]} failed`)
+      throw new RequestError(ErrorCodes.gitFailed, failureMessage(result, `git ${args[0]}`))
     }
   }
 }

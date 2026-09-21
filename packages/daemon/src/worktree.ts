@@ -32,24 +32,126 @@ import { RequestError } from './rpc/params.js'
 /** A git call that hangs must not hang the daemon. Generous: a checkout can be slow. */
 export const GIT_TIMEOUT_MS = 30_000
 
+/** How much of a git command's stdout is buffered before `execFile` gives up. */
+export const GIT_MAX_BUFFER = 8 * 1024 * 1024
+
 export interface GitResult {
   readonly stdout: string
   readonly stderr: string
   readonly code: number
+  /**
+   * `execFile` killed the child because its output passed `GIT_MAX_BUFFER`.
+   *
+   * Carried rather than inferred, because the symptom is a non-zero code with an
+   * *empty* stderr and a partial stdout — indistinguishable, at the call site, from a
+   * git that failed quietly. See `gitBufferOverflowMessage`.
+   *
+   * Optional so a test's fake runner — which cannot overflow anything — stays three
+   * fields long.
+   */
+  readonly overflowed?: boolean
 }
 
 export type GitRunner = (args: readonly string[], cwd: string) => Promise<GitResult>
+
+/**
+ * The environment every git call runs under.
+ *
+ * Three separate problems, all of them PHASE-7 follow-ups against shipped code, and
+ * all three fixed by not letting git inherit the daemon's environment unexamined.
+ *
+ * **1. git must not be able to prompt.** `git.sync` talks to a remote. A remote that
+ * demands credentials makes git block on a terminal prompt that nothing is attached to,
+ * and `execFile`'s timeout then kills it after thirty seconds with no output at all —
+ * so the user is told "git push failed" and never told the word *credentials*. A
+ * timeout is the wrong fix; making the prompt impossible is the right one, because a
+ * git that cannot prompt **fails immediately and says why**. Cached credentials are
+ * untouched: only the interactive fallback dies. `GCM_INTERACTIVE` is separate because
+ * Git Credential Manager ignores the two askpass variables.
+ *
+ * **2. git translates itself.** `parseBranch` matches the literal `No commits yet on `
+ * and `sync` relays git's stderr verbatim; a gettext-enabled git under a non-English
+ * locale translates both, down to the `fatal:` prefix. English **UTF-8** rather than
+ * plain `C`, so hooks git spawns keep a UTF-8 `LC_CTYPE`; `LANGUAGE` outranks `LC_ALL`
+ * in gettext's lookup, so it is pinned too. Same argument as `--renames`: what git
+ * prints should depend on the repository, not on who is running it.
+ *
+ * **3. the panel fights the user's own shell over `index.lock`.** This one is specific
+ * to a docked panel: `git status` takes the lock to write back a refreshed index, and
+ * the panel is docked *next to a shell the user runs git in*. `GIT_OPTIONAL_LOCKS=0`
+ * makes every read here read-only, so it can neither lose that race nor cause it.
+ *
+ * The two `credential.*` settings ride in through `GIT_CONFIG_KEY_n`/`VALUE_n` rather
+ * than `-c`, so they apply to the whole process — submodule and helper invocations
+ * included — without the caller having to remember to pass them. Verified accepted by
+ * git 2.54.0 (Apple Git-157) on 2026-09-21: the env spelling above reads back through
+ * `git config --get credential.interactive`.
+ */
+export function gitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  // Any `GIT_CONFIG_*` the caller already set would be clobbered by the indices below,
+  // so they are dropped rather than silently half-honoured.
+  const base: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/u.test(key)) base[key] = value
+  }
+  return {
+    ...base,
+    // 1 — no prompting, on any of the four paths that can raise one.
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_ASKPASS: env['GIT_ASKPASS'] ?? '',
+    SSH_ASKPASS: env['SSH_ASKPASS'] ?? '',
+    GCM_INTERACTIVE: 'never',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'credential.interactive',
+    GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'credential.guiPrompt',
+    GIT_CONFIG_VALUE_1: 'false',
+    // 2 — untranslated output, in UTF-8 so hooks keep a sane LC_CTYPE.
+    LANGUAGE: 'en',
+    LC_ALL: 'en_US.UTF-8',
+    LANG: 'en_US.UTF-8',
+    // 3 — never take `index.lock` for a read.
+    GIT_OPTIONAL_LOCKS: '0'
+  }
+}
+
+/**
+ * Whether an `execFile` failure is the `maxBuffer` cap rather than git's own exit.
+ *
+ * Node reports it as `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` in `code`, and older versions
+ * as `ENOBUFS`; both leave a *partial* stdout and an empty stderr behind, which is why
+ * a caller that only looks at the exit code reports it as an unexplained failure.
+ */
+function isBufferOverflow(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || code === 'ENOBUFS') return true
+  const message = (error as { message?: unknown } | null)?.message
+  return typeof message === 'string' && /maxBuffer/u.test(message)
+}
+
+/**
+ * What to say when git produced more output than the daemon will hold.
+ *
+ * "git status failed" is what this used to be, because the overflow leaves stderr
+ * empty and every call site falls back to `stderr || '<command> failed'`. The honest
+ * message names the cap, since the repository is not broken and retrying will not help.
+ */
+export function gitBufferOverflowMessage(what: string): string {
+  return `${what}: this repository's output exceeds the daemon's ${Math.round(
+    GIT_MAX_BUFFER / (1024 * 1024)
+  )} MB buffer`
+}
 
 export const runGit: GitRunner = (args, cwd) =>
   new Promise((resolvePromise) => {
     execFile(
       'git',
       [...args],
-      { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+      { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, env: gitEnv() },
       (error, stdout, stderr) => {
         const code =
           error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? ((error as { code: number }).code) : 1
-        resolvePromise({ stdout, stderr, code })
+        resolvePromise({ stdout, stderr, code, overflowed: error !== null && isBufferOverflow(error) })
       }
     )
   })

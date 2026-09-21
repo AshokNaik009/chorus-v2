@@ -1,4 +1,4 @@
-# leap-chorus
+# chorus
 
 A terminal multiplexer built for AI coding agents. Split panes like tmux, but every
 pane knows *which* agent is running in it and whether that agent is idle, working,
@@ -106,6 +106,7 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 | `C-b $` | rename the workspace |
 | `C-b ?` | settings |
 | `C-b s` | show or hide the sidebar |
+| `C-b e` / `C-b f` / `C-b g` | the docked panel: files, search, source control |
 | `C-b PgUp` / `PgDn` / `End` | scroll this pane's history |
 | `C-b r` / `C-b R` | force a repaint / reload the config |
 | `C-b d` | detach — the daemon and every pane keep running |
@@ -121,8 +122,10 @@ If clicks do nothing, the terminal is not forwarding them: macOS Terminal.app ne
 ## File explorer
 
 `Ctrl-B e` opens a file tree for the focused pane's repository — or its working
-directory when that is not a checkout. `1` and `2` switch between the explorer and
-source control while either is open.
+directory when that is not a checkout. It is one of three views in a single docked
+panel, with an activity bar across the top: `1` files, `2` search, `3` source
+control, or click a chip. Each view keeps its own cursor and scroll while the panel
+is open, so switching and switching back lands you where you left.
 
 | Key | Action |
 |---|---|
@@ -143,6 +146,42 @@ they sit in the Private Use Area, get measured as one column, and shift every co
 after them on a terminal that disagrees. That is the bug `pane-buttons = ascii`
 already exists to escape.
 
+## Search
+
+The middle view of the docked panel, in two modes.
+
+**Quick open** is `Ctrl-P`, from whichever view you are in. The file list is fetched
+once and filtered in the client as you type — fuzzily, so `clsrch` finds
+`packages/client/src/search.ts` — and `Esc` puts you back in the view you came from
+rather than closing the panel. Enter opens the file in a pane running your `$PAGER`.
+
+**Content search** is `Ctrl-F`, or `Ctrl-B f`. Type a pattern and press Enter; it
+runs once per submit rather than on every keystroke, because it reads every file
+under the root. Results are grouped by file, and Enter on one opens that file at
+that line.
+
+| Key | Action |
+|---|---|
+| `Ctrl-P` / `Ctrl-F` | quick open / content search |
+| `Tab` / `Shift-Tab` | query → include → exclude → results |
+| `Alt-C` / `Alt-W` / `Alt-R` | case-sensitive / whole word / regular expression |
+| `Enter` | search, or open the result under the cursor |
+| `↑↓` | move in the results |
+| `Esc` | close (or leave quick open) |
+
+Include and exclude take comma-separated globs — `*.ts, docs` — and a bare directory
+name means everything under it. Every result set is bounded in the daemon: 1,000
+matches, 20,000 files, 15 seconds, and 500 characters of any one line. When a bound
+is hit the status line says which one, because "1,000 matches" and "1,000 matches and
+there were more" are different facts.
+
+**Search needs `ripgrep`.** herdr-sidebar compiles ripgrep's crates into its binary;
+we shell out to `rg` instead, the same way diffs go to your pager. Without it, quick
+open still works inside a git repository — it falls back to `git ls-files` — and
+content search tells you what to install, with the command for your platform. It
+says "not on the daemon's PATH" rather than "not installed", because a daemon started
+outside a login shell may not see a binary you can run.
+
 ## Source control
 
 `Ctrl-B g` opens a Source Control panel docked where the sidebar sits, for the
@@ -162,8 +201,10 @@ nobody.
 | `c` | commit what is staged |
 | `d` | discard the file under the cursor (asks first) |
 | `o` | open its diff in a new pane |
+| `b` | switch branch |
+| `S` | sync: pull --rebase --autostash, then push |
 | `r` | refresh |
-| `Esc` / `b` / `q` | close |
+| `Esc` / `q` | close |
 
 The panel takes the keyboard while it is open — `d` has to mean discard, not a
 keystroke for the shell behind it — and `Esc` hands it back. `Ctrl-B` still reaches

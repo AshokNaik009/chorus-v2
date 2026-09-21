@@ -176,7 +176,9 @@ export function tabCreate(context: ModelContext, params: Params): MutationResult
     ...maybe('cwd', optionalString(params, 'cwd')),
     ...maybe('label', optionalString(params, 'label')),
     ...maybe('focus', optionalBoolean(params, 'focus')),
-    ...maybe('env', optionalEnv(params, 'env'))
+    ...maybe('env', optionalEnv(params, 'env')),
+    ...maybe('command', optionalString(params, 'command')),
+    ...maybe('args', optionalStringArray(params, 'args'))
   })
 }
 

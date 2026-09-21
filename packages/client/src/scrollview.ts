@@ -60,6 +60,23 @@ export class ScrollView {
   }
 
   /**
+   * Pull the offset back inside a list of `count` rows, and return it.
+   *
+   * For a view with **no cursor** — the preview, where the offset is the only position
+   * there is. `follow` cannot serve: it takes a cursor to move towards, and passing the
+   * offset as its own cursor would pin the viewport to its top row and stop `by` from
+   * ever scrolling past one screen. Clamping is what `follow` does last, on its own.
+   */
+  clamp(count: number, height: number): number {
+    if (height <= 0 || count <= 0) {
+      this.offset = 0
+      return 0
+    }
+    this.offset = Math.max(0, Math.min(this.offset, Math.max(0, count - height)))
+    return this.offset
+  }
+
+  /**
    * The list index drawn at screen row `row`, or null when that row is not a list row.
    *
    * `top` is the first screen row the list occupies, so a panel with a header passes

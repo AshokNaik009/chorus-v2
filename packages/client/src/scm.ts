@@ -41,6 +41,15 @@ export type ScmOutcome =
   /** Open the branch picker. The app fetches the branches; the panel holds none. */
   | { readonly kind: 'branches' }
   | { readonly kind: 'sync' }
+  /**
+   * Draft a commit message and open the commit box with it already filled in.
+   *
+   * herdr-sidebar's `A`, and the `✧` it puts beside a drafted message. The draft is
+   * written from the staged filenames offline unless `[sidebar] ai-commit` is on, which
+   * it is not by default — see `suggest.ts` for why that switch exists and why the
+   * fallback is the interesting half.
+   */
+  | { readonly kind: 'suggest' }
 
 /** A row in the flattened list: a section header, or a file on one side of the index. */
 interface Row {
@@ -92,9 +101,14 @@ export class ScmPanel {
     this.note = null
   }
 
-  /** Report something that worked — what a sync did. Not an error, so the list stays. */
+  /**
+   * Report something that worked — what a sync did. Not an error, so the list stays.
+   *
+   * An empty message clears the line rather than drawing a blank one, which is how a
+   * call that finished with nothing to say takes its own "working…" note back down.
+   */
   report(message: string): void {
-    this.note = message
+    this.note = message.length === 0 ? null : message
     this.error = null
   }
 
@@ -227,6 +241,10 @@ export class ScmPanel {
         // Capitalised, as in herdr-sidebar. Sync talks to the remote and can rebase, so
         // it is the one action here that should not be one relaxed finger away.
         return { kind: 'sync' }
+      case 'A':
+        // Capitalised for the same reason, doubled: with `[sidebar] ai-commit` on this
+        // is the only key in the project that can put a working tree in front of a model.
+        return { kind: 'suggest' }
       case 'r':
         return { kind: 'refresh' }
       case 'a':
@@ -383,4 +401,4 @@ export function renderScmPanel(
 
 /** The one-line hint for the status bar while the panel has the keyboard. */
 export const SCM_HINT =
-  '↑↓ move · ⏎ stage/unstage · a/u all · c commit · d discard · o diff · b branch · S sync · r refresh · esc close'
+  '↑↓ move · ⏎ stage/unstage · a/u all · c commit · A draft · d discard · o diff · b branch · S sync · 1 files · 2 search · esc close'

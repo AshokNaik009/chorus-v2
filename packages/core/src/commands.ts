@@ -52,6 +52,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'client.settings', summary: 'Open settings: theme and agent integrations', scope: 'client' },
   { name: 'client.source-control', summary: 'Open the source control panel', scope: 'client' },
   { name: 'client.explorer', summary: 'Open the file explorer', scope: 'client' },
+  { name: 'client.search', summary: 'Open search: quick open and content search', scope: 'client' },
   { name: 'tab.rename', summary: 'Rename the active tab', scope: 'session' },
   { name: 'workspace.close', summary: 'Close the active workspace', scope: 'session' },
   { name: 'workspace.next', summary: 'Focus the next workspace', scope: 'session' },

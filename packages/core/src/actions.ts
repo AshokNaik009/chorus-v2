@@ -57,7 +57,7 @@ export type Action =
   | { readonly type: 'workspace.rename'; readonly workspaceId: string; readonly label: string }
   | { readonly type: 'workspace.move'; readonly workspaceId: string; readonly insertIndex: number }
   | { readonly type: 'workspace.move_block'; readonly workspaceIds: readonly string[]; readonly beforeWorkspaceId?: string }
-  | { readonly type: 'tab.create'; readonly workspaceId?: string; readonly cwd?: string; readonly label?: string; readonly focus?: boolean; readonly env?: Readonly<Record<string, string>> }
+  | { readonly type: 'tab.create'; readonly workspaceId?: string; readonly cwd?: string; readonly label?: string; readonly focus?: boolean; readonly env?: Readonly<Record<string, string>>; readonly command?: string; readonly args?: readonly string[] }
   | { readonly type: 'tab.close'; readonly tabId: string }
   | { readonly type: 'tab.focus'; readonly tabId: string }
   | { readonly type: 'tab.rename'; readonly tabId: string; readonly label: string }
@@ -331,7 +331,9 @@ function tabCreate(state: AppState, action: Extract<Action, { type: 'tab.create'
     id: paneId,
     cwd,
     createdAt: state.now(),
-    ...(action.env === undefined ? {} : { env: action.env })
+    ...(action.env === undefined ? {} : { env: action.env }),
+    ...(action.command === undefined ? {} : { command: action.command }),
+    ...(action.args === undefined ? {} : { args: action.args })
   })
   const tab = createTab({
     id: tabId,

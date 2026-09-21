@@ -102,10 +102,22 @@ import {
   type PromptOutcome
 } from './prompt.js'
 import { playSound, type SoundKind } from './sound.js'
-import { MIN_SCM_WIDTH, SCM_HINT, ScmPanel, renderScmPanel, type ScmOutcome } from './scm.js'
-import { EXPLORER_HINT, ExplorerPanel, type ExplorerOutcome } from './explorer.js'
+import type { ScmOutcome } from './scm.js'
+import type { ExplorerOutcome } from './explorer.js'
+import { SidebarPanels, panelSettings, type PanelOutcome, type ViewId } from './panel.js'
+import type { PreviewOutcome } from './preview.js'
+import { pagerArgs, type PanelKey, type SearchOutcome } from './search.js'
 import { BRANCH_HINT, BranchPicker, type BranchOutcome } from './branch.js'
-import type { FsListResult, GitBranchesResult, GitStatusResult, GitSyncResult } from '@leap-chorus/protocol'
+import type {
+  FsListResult,
+  GitBranchesResult,
+  GitStatusResult,
+  GitSyncResult,
+  GitSuggestResult,
+  PreviewResult,
+  SearchContentResult,
+  SearchFilesResult
+} from '@leap-chorus/protocol'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
@@ -247,15 +259,16 @@ export class TuiApp {
   /** The settings dialog, or null when it is closed. */
   private settings: SettingsDialog | null = null
   /**
-   * The source-control panel, or null when it is closed.
+   * The docked panel — explorer, search and source control — or null when it is closed.
    *
    * Docked where the sidebar goes rather than floating, because it is something you
    * work *beside* — a modal covering the panes would defeat the point of seeing the
-   * diff and the code at once.
+   * diff and the code at once. One container holds all three views so that switching
+   * between them keeps each one's cursor and scroll; see `panel.ts`.
    */
-  private scm: ScmPanel | null = null
-  /** The file explorer, or null when it is closed. Shares the dock with the panel above. */
-  private explorer: ExplorerPanel | null = null
+  private panels: SidebarPanels | null = null
+  /** The view the dock was showing when it last closed. See `[sidebar] remember-view`. */
+  private lastView: ViewId | null = null
   /**
    * The branch picker, or null when it is closed.
    *
@@ -362,6 +375,15 @@ export class TuiApp {
     this.keymap = buildKeymap(config)
     this.palette = paletteOf(config)
     this.sidebarMode = config.ui.sidebar ? 'full' : 'hidden'
+    // The dock takes the new `[sidebar]` block **without being rebuilt**, which is what
+    // criterion 7 asks for: `C-b R` changes the icon theme, the layout and the footer
+    // while the panel stays open on the row the cursor was on.
+    this.panels?.applySettings(panelSettings(config))
+    // Turning the footer or `unified` on asks for something the dock had no reason to
+    // fetch a moment ago. Fire and forget rather than awaited, because `applyConfig` is
+    // the synchronous seam every caller of it depends on — and a footer that appears a
+    // round trip later is fine, where a reload that blocked on git would not be.
+    void this.primeForSettings()
     const complaints = [...errors, ...problems.map((problem) => problem.message)]
     if (complaints.length > 0) {
       this.status = complaints.length === 1 ? (complaints[0] as string) : `${complaints[0] as string} (+${complaints.length - 1})`
@@ -559,19 +581,40 @@ export class TuiApp {
     return this.sidebarMode !== 'hidden' && this.cols >= MIN_COLS_FOR_SIDEBAR
   }
 
+  /**
+   * Which side the dock takes. `[sidebar] dock`, and left unless asked.
+   *
+   * Read through a method rather than inlined, because four places need it and a
+   * fifth — the drag handler — needs to know which edge it is dragging.
+   */
+  private dockRight(): boolean {
+    return this.config.sidebar.dock === 'right'
+  }
+
   private sidebarArea(): Rect | null {
     if (!this.showSidebar()) return null
+    const height = Math.max(0, this.rows - this.statusRows())
     // A drag overrides the configured width for this client only. Sidebar geometry is
     // presentation: the daemon must never learn it, because the next client to attach
     // may be a different size. See `packages/protocol/src/session-model.ts`.
     if (this.sidebarMode === 'rail') {
-      return { x: 0, y: 0, width: RAIL_WIDTH, height: Math.max(0, this.rows - this.statusRows()) }
+      return { x: this.dockRight() ? this.cols - RAIL_WIDTH : 0, y: 0, width: RAIL_WIDTH, height }
     }
     // The panel needs room a workspace list does not: a path plus its status letter.
     const configured = this.sidebarWidthOverride ?? this.config.ui.sidebarWidth
-    const wanted = this.scm !== null || this.explorer !== null ? Math.max(configured, MIN_SCM_WIDTH) : configured
+    const wanted = this.panels === null ? configured : Math.max(configured, this.panels.minWidth())
     const width = Math.max(MIN_SIDEBAR_WIDTH, Math.min(wanted, Math.floor(this.cols / 3)))
-    return { x: 0, y: 0, width, height: Math.max(0, this.rows - this.statusRows()) }
+    // Capped at a third of the screen on both sides, so docking right can no more
+    // collapse the panes than docking left can. At 80 columns that is 26 for the dock
+    // and 54 for everything else, which is criterion 9's case.
+    return { x: this.dockRight() ? Math.max(0, this.cols - width) : 0, y: 0, width, height }
+  }
+
+  /** Where the panes and chrome start, given which side the dock is on. */
+  private contentLeft(): number {
+    const sidebar = this.sidebarArea()
+    if (sidebar === null) return 0
+    return this.dockRight() ? 0 : sidebar.width
   }
 
   private statusRows(): number {
@@ -585,19 +628,21 @@ export class TuiApp {
   private tabBarArea(): Rect | null {
     if (this.tabBarRows() === 0) return null
     const sidebar = this.sidebarArea()
-    const x = sidebar === null ? 0 : sidebar.width
-    return { x, y: 0, width: Math.max(0, this.cols - x), height: TAB_BAR_ROWS }
+    const x = this.contentLeft()
+    const width = sidebar === null ? this.cols : this.cols - sidebar.width
+    return { x, y: 0, width: Math.max(0, width), height: TAB_BAR_ROWS }
   }
 
   /** Where panes go: the screen minus sidebar, tab bar and status bar. */
   private contentArea(): Rect {
     const sidebar = this.sidebarArea()
-    const x = sidebar === null ? 0 : sidebar.width
+    const x = this.contentLeft()
     const y = this.tabBarRows()
+    const width = sidebar === null ? this.cols : this.cols - sidebar.width
     return {
       x,
       y,
-      width: Math.max(1, this.cols - x),
+      width: Math.max(1, width),
       height: Math.max(1, this.rows - y - this.statusRows())
     }
   }
@@ -735,6 +780,34 @@ export class TuiApp {
     )
   }
 
+  /**
+   * A keystroke as the docked panel wants it.
+   *
+   * The panel needs more than `(name, char)`: it has text fields *and* chorded
+   * toggles, so `Alt-C` has to be distinguishable from a typed `c` and `Ctrl+P` from a
+   * typed `p`. `typedChar` deliberately returns nothing under Alt — that is right for
+   * a view that only types — so the Alt case reads `key.char` directly.
+   */
+  private panelKey(key: Key): PanelKey {
+    const alt = hasModifier(key.modifiers, MOD_ALT)
+    return {
+      name: key.name,
+      char: alt ? key.char : this.typedChar(key),
+      alt,
+      ctrl: hasModifier(key.modifiers, MOD_CTRL),
+      shift: hasModifier(key.modifiers, MOD_SHIFT)
+    }
+  }
+
+  /** A view's own key closes the dock when that view is already the one showing. */
+  private async togglePanel(view: ViewId): Promise<void> {
+    if (this.panels !== null && this.panels.active() === view) {
+      this.closePanels()
+      return
+    }
+    await this.openPanel(view)
+  }
+
   private async handleKey(key: Key, bytes: Uint8Array): Promise<void> {
     // A prompt owns the keyboard while it is open: the point of typing a name is that
     // the letters do not also run commands or reach the pane.
@@ -767,25 +840,11 @@ export class TuiApp {
     // The panel owns the keyboard while it is open, for the reason scm.ts gives: `d`
     // discards a file here and is an ordinary keystroke to the shell behind it. The
     // prefix still wins, so `C-b` reaches the multiplexer from inside the panel.
-    if ((this.scm !== null || this.explorer !== null) && !this.prefixArmed && !isPrefix(this.keymap, key)) {
-      // `1` and `2` switch views from either one, which is what the activity bar does
-      // in the sidebar this borrows from.
-      if (key.char === '1' && this.explorer === null) {
-        await this.openExplorer()
-        return
-      }
-      if (key.char === '2' && this.scm === null) {
-        await this.openScm()
-        return
-      }
-      if (this.explorer !== null) {
-        await this.applyExplorerOutcome(this.explorer.handleKey(key.name, this.typedChar(key)))
-        return
-      }
-      if (this.scm !== null) {
-        await this.applyScmOutcome(this.scm.handleKey(key.name, this.typedChar(key)))
-        return
-      }
+    if (this.panels !== null && !this.prefixArmed && !isPrefix(this.keymap, key)) {
+      // The container decides what is a view switch, what is a panel gesture, and what
+      // belongs to the active view. `1` `2` `3` and `Ctrl+P` are its, not ours.
+      await this.applyPanelOutcome(this.panels.handleKey(this.panelKey(key)))
+      return
     }
     if (this.prefixArmed) {
       this.prefixArmed = false
@@ -1299,7 +1358,12 @@ export class TuiApp {
       // anywhere kept resizing — the button release was never required. With motion
       // reporting on by default that turned every near-miss into a runaway resize.
       if (mouse.kind === 'drag') {
-        this.sidebarWidthOverride = Math.max(MIN_SIDEBAR_WIDTH, mouse.column + 1)
+        // Dragging the inner edge: from the left it is the column itself, from the
+        // right it is the distance back to the screen's edge. Without this the handle
+        // on a right-docked panel widens it when you drag inward.
+        this.sidebarWidthOverride = this.dockRight()
+          ? Math.max(MIN_SIDEBAR_WIDTH, this.cols - mouse.column)
+          : Math.max(MIN_SIDEBAR_WIDTH, mouse.column + 1)
         this.invalidate()
         return true
       }
@@ -1468,7 +1532,7 @@ export class TuiApp {
 
 
   // -------------------------------------------------------------------------
-  // Source control
+  // The docked panel: explorer, search, source control
   // -------------------------------------------------------------------------
 
   /**
@@ -1486,13 +1550,75 @@ export class TuiApp {
     return this.state.focusedPaneId
   }
 
+  /**
+   * Open the dock on `view`, building the container if it is not up.
+   *
+   * The container is what makes a switch cheap, so it outlives a switch and not a
+   * close: reopening the dock starts from a fresh listing, which is what `C-b e` meant
+   * before this phase and still means now.
+   */
+  private async openPanel(view: ViewId): Promise<void> {
+    if (this.panels === null) {
+      // `[sidebar] remember-view` decides whether reopening lands on the view you left
+      // or on the one the command names. A command that names a view always wins —
+      // `C-b g` means Source Control whatever was last on screen — so the remembered
+      // view only applies to the generic open.
+      const start = this.config.sidebar.rememberView ? (this.lastView ?? view) : view
+      this.panels = new SidebarPanels(start, panelSettings(this.config))
+      this.requestRender()
+      await this.primeView(start)
+      return
+    }
+    // Asking for Search *by its command* is the find gesture, so it puts the caret in
+    // the query box. Reaching it with `2` or the activity bar does not — see `panel.ts`.
+    await this.applyPanelOutcome(view === 'search' ? this.panels.contentSearch() : this.panels.show(view))
+  }
+
+  /**
+   * Fetch what the current `[sidebar]` settings need but the active view does not.
+   *
+   * Only the gap, and only when it is a gap: a status that is already loaded is left
+   * alone, so a reload that changed the icon theme costs no round trip at all.
+   */
+  private async primeForSettings(): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    const wantsStatus = this.config.sidebar.gitFooter || this.config.sidebar.layout === 'unified'
+    if (!wantsStatus || panels.scm.status !== null) return
+    await this.refreshScm()
+  }
+
+  /** Fetch whatever a view needs the first time it is looked at. */
+  private async primeView(view: ViewId): Promise<void> {
+    if (view === 'scm') {
+      await this.refreshScm()
+      return
+    }
+    // Two `[sidebar]` settings make the Source Control status a *dock-wide* fact rather
+    // than one view's: the Git footer draws the branch under every view, and `unified`
+    // layout draws the changes list beside the tree. Without this both come up blank on
+    // open and stay blank until somebody visits Source Control by hand, which is the
+    // one thing those settings exist to avoid.
+    if (this.config.sidebar.gitFooter || this.config.sidebar.layout === 'unified') {
+      await this.refreshScm()
+    }
+    if (view === 'explorer') {
+      await this.listExplorer('')
+      // Decorations come from the same status the panel uses, fetched once on open. A
+      // tree with no git markers is a file manager; the markers are the point.
+      await this.refreshExplorerStatus()
+      return
+    }
+    this.requestRender()
+  }
+
   /** Re-read the status. Every mutation returns one, so this is only for open and `r`. */
   private async refreshScm(): Promise<void> {
-    const panel = this.scm
-    if (panel === null) return
+    const panels = this.panels
+    if (panels === null) return
     const paneId = this.scmPaneId()
     if (paneId === null) {
-      panel.fail('no focused pane')
+      panels.scm.fail('no focused pane')
       this.requestRender()
       return
     }
@@ -1513,29 +1639,144 @@ export class TuiApp {
     method: 'git.status' | 'git.stage' | 'git.unstage' | 'git.discard' | 'git.commit' | 'git.checkout',
     params: Record<string, unknown>
   ): Promise<void> {
-    const panel = this.scm
-    if (panel === null) return
+    const panels = this.panels
+    if (panels === null) return
     try {
       const status = (await this.options.client.call(method, params as never)) as GitStatusResult
-      if (this.scm === panel) panel.adopt(status)
+      if (this.panels === panels) panels.scm.adopt(status)
     } catch (error) {
-      if (this.scm === panel) panel.fail(messageOf(error))
+      if (this.panels === panels) panels.scm.fail(messageOf(error))
     }
     this.requestRender()
   }
 
+  /** Route whatever the container or the active view decided. */
+  private async applyPanelOutcome(result: PanelOutcome): Promise<void> {
+    switch (result.view) {
+      case 'panel':
+        if (result.outcome === 'close') {
+          this.closePanels()
+          return
+        }
+        if (result.outcome === 'switched') {
+          await this.primeSwitched()
+          return
+        }
+        this.requestRender()
+        return
+      case 'explorer':
+        await this.applyExplorerOutcome(result.outcome)
+        return
+      case 'scm':
+        await this.applyScmOutcome(result.outcome)
+        return
+      case 'search':
+        await this.applySearchOutcome(result.outcome)
+        return
+      case 'preview':
+        await this.applyPreviewOutcome(result.outcome)
+        return
+    }
+  }
+
+  /**
+   * The preview asked for something. There are only two things it can ask for.
+   *
+   * `open` is the one that matters: the preview is for glancing, and `⏎` inside it
+   * hands the file to `$PAGER` in a pane — which is where reading belongs and has been
+   * the position for three phases. The embedded view does not replace that; it gets you
+   * to the point of deciding whether you want it.
+   */
+  private async applyPreviewOutcome(outcome: PreviewOutcome): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    switch (outcome.kind) {
+      case 'none':
+        this.requestRender()
+        return
+      case 'close':
+        this.closePanels()
+        return
+      case 'open': {
+        const root = this.searchRoot()
+        if (root === null) return
+        await this.openInPager(`${root}/${outcome.path}`, root, null)
+        return
+      }
+    }
+  }
+
+  /**
+   * Fetch a file for the preview.
+   *
+   * The reply is matched against what the panel asked for, so a cursor moving faster
+   * than the daemon can read cannot leave the wrong file on screen — `PreviewPanel`
+   * drops anything that is not an answer to the question still being asked.
+   */
+  private async readPreview(path: string): Promise<void> {
+    const panels = this.panels
+    const paneId = this.scmPaneId()
+    if (panels === null) return
+    if (paneId === null) {
+      panels.preview.fail(path, 'no focused pane')
+      this.requestRender()
+      return
+    }
+    const width = this.sidebarArea()?.width ?? MIN_SIDEBAR_WIDTH
+    this.requestRender()
+    try {
+      const result = (await this.options.client.call('preview.read', {
+        paneId,
+        path,
+        width
+      } as never)) as PreviewResult
+      if (this.panels === panels) panels.preview.adopt(result)
+    } catch (error) {
+      if (this.panels === panels) panels.preview.fail(path, messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /**
+   * Load what the newly-shown view has never loaded.
+   *
+   * Only what is *missing*, not a refresh: the point of the container is that a view
+   * you come back to is the view you left, cursor and scroll included, and re-fetching
+   * would throw that away for a tree whose contents have almost certainly not changed
+   * in the two seconds since you looked at it. `r` is still there for when they have.
+   */
+  private async primeSwitched(): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    this.requestRender()
+    const view = panels.active()
+    if (view === 'scm' && panels.scm.status === null) await this.refreshScm()
+    if (view === 'explorer' && panels.explorer.root === '') {
+      await this.listExplorer('')
+      await this.refreshExplorerStatus()
+    }
+    if (view === 'preview') {
+      // Arriving at an empty preview with a file under the tree's cursor: show it.
+      // See `SidebarPanels.previewTarget`.
+      const target = panels.previewTarget()
+      if (target !== null) {
+        panels.preview.request(target)
+        await this.readPreview(target)
+      }
+    }
+  }
+
   private async applyScmOutcome(outcome: ScmOutcome): Promise<void> {
-    const panel = this.scm
-    if (panel === null) return
+    const panels = this.panels
+    if (panels === null) return
+    const panel = panels.scm
     const paneId = this.scmPaneId()
     switch (outcome.kind) {
       case 'none':
         this.requestRender()
         return
       case 'close':
-        this.scm = null
-        this.setStatus('')
-        this.requestRender()
+        this.closePanels()
         return
       case 'refresh':
         await this.refreshScm()
@@ -1568,6 +1809,11 @@ export class TuiApp {
           }
         )
         this.requestRender()
+        return
+      }
+      case 'suggest': {
+        if (paneId === null) return
+        await this.draftCommit(paneId)
         return
       }
       case 'commit': {
@@ -1603,10 +1849,55 @@ export class TuiApp {
   }
 
 
-  /** Close whichever side panel is open, and give the keyboard back. */
+  /**
+   * Draft a commit message and open the commit box with it in.
+   *
+   * The draft is a *starting point*, never a commit: it lands in the same prompt `c`
+   * opens, with the caret after it, and nothing is committed until the user presses
+   * Enter. `[sidebar] ai-commit` decides whether the local `claude` CLI is consulted;
+   * off — the default — and the daemon starts no subprocess at all and writes the
+   * subject from the staged filenames.
+   *
+   * A note travels back when the model was asked for and did not run, and it is shown
+   * *beside a usable message* rather than instead of one: a missing CLI is a reason the
+   * draft is plainer, not a reason there is no draft.
+   */
+  private async draftCommit(paneId: string): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    const panel = panels.scm
+    if (panel.status === null || panel.status.staged.length === 0) {
+      panel.fail('nothing staged to describe')
+      this.requestRender()
+      return
+    }
+    panel.report(this.config.sidebar.aiCommit ? 'drafting…' : 'drafting from filenames…')
+    this.requestRender()
+    try {
+      const result = (await this.options.client.call('git.suggest', {
+        paneId,
+        ai: this.config.sidebar.aiCommit
+      } as never)) as GitSuggestResult
+      if (this.panels !== panels) return
+      // `✧` only when a model actually wrote it, as in herdr-sidebar. A prefix that
+      // appeared whatever produced the line would stop meaning anything.
+      const label = result.source === 'claude' ? '✧ commit message' : 'commit message'
+      this.prompt = { dialog: new PromptDialog(label, result.message), kind: 'commit', id: paneId }
+      // The "drafting…" note is cleared either way: a note describes the call that
+      // produced it, and this call is over.
+      panel.report(result.note ?? '')
+    } catch (error) {
+      if (this.panels === panels) panel.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /** Close the dock and give the keyboard back. */
   private closePanels(): void {
-    this.scm = null
-    this.explorer = null
+    // Remembered before the container goes, for `[sidebar] remember-view`. Kept even
+    // when the setting is off: turning it on should not need a restart to work.
+    this.lastView = this.panels?.active() ?? this.lastView
+    this.panels = null
     this.branches = null
     this.setStatus('')
     this.requestRender()
@@ -1621,19 +1912,19 @@ export class TuiApp {
    * been deleted.
    */
   private async openBranches(): Promise<void> {
-    const panel = this.scm
+    const panels = this.panels
     const paneId = this.scmPaneId()
-    if (panel === null || paneId === null) return
+    if (panels === null || paneId === null) return
     try {
       const result = (await this.options.client.call('git.branches', { paneId } as never)) as GitBranchesResult
-      if (this.scm !== panel) return
+      if (this.panels !== panels) return
       if (result.branches.length === 0) {
-        panel.fail('no branches yet — this repository has no commits')
+        panels.scm.fail('no branches yet — this repository has no commits')
       } else {
         this.branches = new BranchPicker(result.branches)
       }
     } catch (error) {
-      if (this.scm === panel) panel.fail(messageOf(error))
+      if (this.panels === panels) panels.scm.fail(messageOf(error))
     }
     this.requestRender()
   }
@@ -1674,18 +1965,18 @@ export class TuiApp {
    * conflict has to appear — see `git.ts` for why push never runs after one.
    */
   private async syncScm(): Promise<void> {
-    const panel = this.scm
+    const panels = this.panels
     const paneId = this.scmPaneId()
-    if (panel === null || paneId === null) return
-    panel.report('syncing…')
+    if (panels === null || paneId === null) return
+    panels.scm.report('syncing…')
     this.requestRender()
     try {
       const result = (await this.options.client.call('git.sync', { paneId } as never)) as GitSyncResult
-      if (this.scm !== panel) return
-      panel.adopt(result.status)
-      panel.report(result.message)
+      if (this.panels !== panels) return
+      panels.scm.adopt(result.status)
+      panels.scm.report(result.message)
     } catch (error) {
-      if (this.scm === panel) panel.fail(messageOf(error))
+      if (this.panels === panels) panels.scm.fail(messageOf(error))
     }
     this.requestRender()
   }
@@ -1698,80 +1989,55 @@ export class TuiApp {
    */
   private async handlePanelClick(mouse: MouseEvent): Promise<boolean> {
     const sidebar = this.sidebarArea()
-    if (sidebar === null) return false
+    const panels = this.panels
+    if (sidebar === null || panels === null) return false
     if (!contains(sidebar, mouse.column, mouse.row)) return false
-    const panel = this.scm
-    const tree = this.explorer
-    if (panel === null && tree === null) return false
     if (mouse.kind === 'scrollup' || mouse.kind === 'scrolldown') {
-      const delta = mouse.kind === 'scrollup' ? -3 : 3
-      if (panel !== null) panel.scrollBy(delta, sidebar)
-      if (tree !== null) tree.scrollBy(delta, sidebar)
+      panels.scrollBy(mouse.kind === 'scrollup' ? -3 : 3, sidebar)
       this.requestRender()
       return true
     }
     if (mouse.kind !== 'down') return true
-    if (panel !== null) {
-      await this.applyScmOutcome(panel.handleClick(mouse.row, sidebar))
-      return true
-    }
-    if (tree !== null && tree.clickRow(mouse.row, sidebar)) this.requestRender()
+    await this.applyPanelOutcome(panels.handleClick(mouse.row, mouse.column, sidebar))
     return true
-  }
-
-  private async openScm(): Promise<void> {
-    this.explorer = null
-    this.scm = new ScmPanel()
-    this.requestRender()
-    await this.refreshScm()
-  }
-
-  private async openExplorer(): Promise<void> {
-    this.scm = null
-    const panel = new ExplorerPanel()
-    this.explorer = panel
-    this.requestRender()
-    await this.listExplorer('')
-    // Decorations come from the same status the panel uses, fetched once on open. A
-    // tree with no git markers is a file manager; the markers are the point.
-    await this.refreshExplorerStatus()
   }
 
   /** Ask the daemon for one directory and hand it to the tree. */
   private async listExplorer(path: string): Promise<void> {
-    const panel = this.explorer
+    const panels = this.panels
     const paneId = this.scmPaneId()
-    if (panel === null) return
+    if (panels === null) return
     if (paneId === null) {
-      panel.fail('no focused pane')
+      panels.explorer.fail('no focused pane')
       this.requestRender()
       return
     }
     try {
       const result = (await this.options.client.call('fs.list', { paneId, path } as never)) as FsListResult
-      if (this.explorer === panel) panel.adopt(result.root, result.path, result.entries)
+      if (this.panels === panels) panels.explorer.adopt(result.root, result.path, result.entries)
     } catch (error) {
-      if (this.explorer === panel) panel.fail(messageOf(error))
+      if (this.panels === panels) panels.explorer.fail(messageOf(error))
     }
     this.requestRender()
   }
 
   /** Refresh the tree's git decorations. Failure is silent: a tree still lists files. */
   private async refreshExplorerStatus(): Promise<void> {
-    const panel = this.explorer
+    const panels = this.panels
     const paneId = this.scmPaneId()
-    if (panel === null || paneId === null) return
+    if (panels === null || paneId === null) return
     try {
-      panel.status = (await this.options.client.call('git.status', { paneId } as never)) as GitStatusResult
+      panels.explorer.status = (await this.options.client.call('git.status', { paneId } as never)) as GitStatusResult
     } catch {
-      panel.status = null
+      panels.explorer.status = null
     }
     this.requestRender()
   }
 
   private async applyExplorerOutcome(outcome: ExplorerOutcome): Promise<void> {
-    const panel = this.explorer
-    if (panel === null) return
+    const panels = this.panels
+    if (panels === null) return
+    const panel = panels.explorer
     switch (outcome.kind) {
       case 'none':
         this.requestRender()
@@ -1804,20 +2070,210 @@ export class TuiApp {
         this.requestRender()
         return
       }
+      case 'preview':
+        // Always the dock, whatever `[sidebar] preview` says: that setting decides what
+        // `⏎` means, and a click is the lighter gesture. See `ExplorerPanel.clickRow`.
+        await this.applyPanelOutcome(panels.showPreview(outcome.path))
+        await this.readPreview(outcome.path)
+        return
+      case 'menu':
+        this.openTreeMenu(outcome.path, outcome.isDir)
+        return
+      case 'open':
+        // `[sidebar] preview` decides whether `⏎` glances here or opens a pane. Off by
+        // default, so the gesture keeps meaning exactly what it meant in phase 7.
+        if (panels.previewOnEnter()) {
+          await this.applyPanelOutcome(panels.showPreview(outcome.path))
+          await this.readPreview(outcome.path)
+          return
+        }
+        await this.openInPager(`${panel.root}/${outcome.path}`, panel.root, null)
+        return
+    }
+  }
+
+  /**
+   * The Explorer's row menu — herdr-sidebar's `m`, and a right-click.
+   *
+   * `ContextMenu` already existed in `prompt.ts` for the workspace rows; this row sat in
+   * `PARITY.md` as an orphan only because nothing had connected the widget to the tree.
+   * Every entry is an action the tree could already perform, gathered into one place
+   * for somebody who has not learned the keys.
+   */
+  private openTreeMenu(path: string, isDir: boolean): void {
+    const sidebar = this.sidebarArea()
+    const items = isDir
+      ? [
+          { label: 'Stage folder', id: 'stage' },
+          { label: 'Open a shell here', id: 'shell' },
+          { label: 'Search in folder', id: 'search' }
+        ]
+      : [
+          { label: 'Open in $PAGER', id: 'open' },
+          { label: 'Preview', id: 'preview' },
+          { label: 'Open in $EDITOR', id: 'edit' },
+          { label: 'Stage', id: 'stage' },
+          { label: 'Diff', id: 'diff' }
+        ]
+    this.menu = {
+      // Anchored at the dock's own column, so the menu opens over the thing it is about
+      // rather than at a corner. `ContextMenu.area` clamps it back on screen.
+      menu: new ContextMenu(items, { column: sidebar?.x ?? 0, row: 2 }),
+      choose: async (id) => {
+        const panels = this.panels
+        if (panels === null) return
+        const root = panels.explorer.root
+        switch (id) {
+          case 'stage':
+            await this.applyExplorerOutcome({ kind: 'stage', path })
+            return
+          case 'open':
+            await this.openInPager(`${root}/${path}`, root, null)
+            return
+          case 'preview':
+            await this.applyPanelOutcome(panels.showPreview(path))
+            await this.readPreview(path)
+            return
+          case 'edit': {
+            // `$EDITOR` in a pane, never an editor of our own. PLAN.md's position, and
+            // the reason `editor.rs`'s 1,157 lines have no counterpart here.
+            const editor = process.env['EDITOR'] ?? process.env['VISUAL'] ?? 'vi'
+            await this.call('pane.split', {
+              direction: 'right',
+              focus: true,
+              command: editor,
+              args: [`${root}/${path}`],
+              cwd: root
+            })
+            return
+          }
+          case 'diff':
+            await this.applyScmOutcome({ kind: 'diff', path, staged: false })
+            return
+          case 'shell':
+            await this.call('pane.split', { direction: 'right', focus: true, cwd: `${root}/${path}` })
+            return
+          case 'search': {
+            // Pre-fill the include box with the folder, which is the one thing a
+            // right-click on a directory can do that a keystroke cannot say as briefly.
+            panels.search.include = path
+            await this.applyPanelOutcome(panels.contentSearch())
+            return
+          }
+        }
+      }
+    }
+    this.requestRender()
+  }
+
+  // -------------------------------------------------------------------------
+  // Search
+  // -------------------------------------------------------------------------
+
+  private async applySearchOutcome(outcome: SearchOutcome): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    switch (outcome.kind) {
+      case 'none':
+        this.requestRender()
+        return
+      case 'close':
+        this.closePanels()
+        return
+      case 'files':
+        await this.listSearchFiles()
+        return
+      case 'search':
+        await this.runContentSearch()
+        return
       case 'open': {
-        // Opened in a pane with the user's own pager, for the same reason a diff is:
-        // this is a multiplexer, and the tool for looking at a file is already installed.
-        const full = `${panel.root}/${outcome.path}`
-        await this.call('pane.split', {
-          direction: 'right',
-          focus: true,
-          command: process.env['PAGER'] ?? 'less',
-          args: [full],
-          cwd: panel.root
-        })
+        // Search results are root-relative, and the root is whatever the daemon
+        // resolved — the same one the tree is showing.
+        const root = this.searchRoot()
+        if (root === null) return
+        await this.openInPager(`${root}/${outcome.path}`, root, outcome.line)
         return
       }
     }
+  }
+
+  /**
+   * The root search results are relative to.
+   *
+   * Taken from whichever view already knows it, rather than asked for again: `fs.list`
+   * and `search.files` both resolve the same way, so the tree's root and the search's
+   * root are the same string.
+   */
+  private searchRoot(): string | null {
+    const panels = this.panels
+    if (panels === null) return null
+    return panels.search.root ?? (panels.explorer.root !== '' ? panels.explorer.root : panels.scm.status?.root ?? null)
+  }
+
+  /** One call per open of quick open, not one per keystroke. See `search.ts`. */
+  private async listSearchFiles(): Promise<void> {
+    const panels = this.panels
+    const paneId = this.scmPaneId()
+    if (panels === null) return
+    if (paneId === null) {
+      panels.search.fail('no focused pane')
+      this.requestRender()
+      return
+    }
+    try {
+      const result = (await this.options.client.call('search.files', { paneId } as never)) as SearchFilesResult
+      if (this.panels === panels) {
+        panels.search.root = result.root
+        panels.search.adoptFiles(result)
+      }
+    } catch (error) {
+      if (this.panels === panels) panels.search.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  private async runContentSearch(): Promise<void> {
+    const panels = this.panels
+    const paneId = this.scmPaneId()
+    if (panels === null) return
+    const panel = panels.search
+    if (paneId === null) {
+      panel.fail('no focused pane')
+      this.requestRender()
+      return
+    }
+    const query = panel.query
+    this.requestRender()
+    try {
+      const result = (await this.options.client.call('search.content', {
+        paneId,
+        query,
+        matchCase: panel.options.matchCase,
+        wholeWord: panel.options.wholeWord,
+        regex: panel.options.regex,
+        include: panel.include,
+        exclude: panel.exclude
+      } as never)) as SearchContentResult
+      if (this.panels === panels) {
+        panel.root = result.root
+        panel.adoptResults(result, query)
+      }
+    } catch (error) {
+      if (this.panels === panels) panel.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /** Open a file in the user's pager, at a line when there is one. See `pagerArgs`. */
+  private async openInPager(file: string, cwd: string, line: number | null): Promise<void> {
+    const pager = process.env['PAGER'] ?? 'less'
+    await this.call('pane.split', {
+      direction: 'right',
+      focus: true,
+      command: pager,
+      args: pagerArgs(pager, file, line),
+      cwd
+    })
   }
 
   /** The `»` in the status bar brings a collapsed sidebar back. */
@@ -2124,19 +2580,15 @@ export class TuiApp {
         return
       }
       case 'client.source-control': {
-        if (this.scm !== null) {
-          this.closePanels()
-          return
-        }
-        await this.openScm()
+        await this.togglePanel('scm')
         return
       }
       case 'client.explorer': {
-        if (this.explorer !== null) {
-          this.closePanels()
-          return
-        }
-        await this.openExplorer()
+        await this.togglePanel('explorer')
+        return
+      }
+      case 'client.search': {
+        await this.togglePanel('search')
         return
       }
       case 'workspace.close': {
@@ -2305,14 +2757,20 @@ export class TuiApp {
 
       const sidebar = this.sidebarArea()
       if (sidebar !== null) {
-        if (this.explorer !== null) {
-          this.explorer.renderInto(this.back, sidebar, this.palette)
-        } else if (this.scm !== null) {
-          renderScmPanel(this.back, sidebar, this.scm, this.palette, true)
+        if (this.panels !== null) {
+          this.panels.render(this.back, sidebar, this.palette, true)
         } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
         } else {
-          renderSidebar(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
+          renderSidebar(
+            this.back,
+            sidebar,
+            this.state,
+            this.palette,
+            this.hits,
+            this.sidebarHoverRow(),
+            this.dockRight()
+          )
         }
       }
       // Grips last among the pane chrome, so they sit on top of the borders they
@@ -2467,10 +2925,8 @@ export class TuiApp {
       ? 'PREFIX'
       : this.branches !== null
         ? BRANCH_HINT
-        : this.explorer !== null
-          ? EXPLORER_HINT
-          : this.scm !== null
-            ? SCM_HINT
+        : this.panels !== null
+          ? this.panels.hint()
       : this.status.length > 0
         ? this.status
         : `${describeChord(this.config.keys.prefix)} ? · menu for keys`
