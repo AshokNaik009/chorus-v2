@@ -35,6 +35,23 @@ export const PLAIN_BORDER: BorderChars = {
   bottomRight: '┘'
 }
 
+/**
+ * The same light box-drawing rules, with rounded corners.
+ *
+ * U+256D..U+2570 are Box Drawing, East Asian *Neutral* like the rest of the block, so
+ * they measure and draw one column exactly as `PLAIN_BORDER`'s corners do. Swapping one
+ * set for the other moves nothing: the four cells that change are corners, and every
+ * hit region on a pane's border is computed from the rect rather than from the glyphs.
+ */
+export const ROUND_BORDER: BorderChars = {
+  horizontal: '─',
+  vertical: '│',
+  topLeft: '╭',
+  topRight: '╮',
+  bottomLeft: '╰',
+  bottomRight: '╯'
+}
+
 export const HEAVY_BORDER: BorderChars = {
   horizontal: '━',
   vertical: '┃',

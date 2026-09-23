@@ -1,363 +1,418 @@
-# Handoff — end of Phase 11
+# Handoff — end of Phase 12
 
 **Read `PLAN.md` first, then `phases/PARITY.md`.** This file is the state of the world
-as this session leaves it. Everything was measured on **2026-09-21**, macOS (darwin
-25.6.0, arm64, Apple silicon, 10 cores), Node v22.1.0, pnpm 10.18.0, git 2.54.0 (Apple
-Git-157). **`rg`, `bat`, `glow` and `delta` are still not installed on this machine** —
-unchanged since phase 9, see *Open threads*.
+as this session leaves it. Everything was measured on **2026-09-22**, macOS (darwin
+25.6.0, arm64, Apple silicon, 10 cores), Node v22.1.0, pnpm 10.18.0. **`rg`, `bat`,
+`glow` and `delta` are still not installed on this machine** — unchanged since phase 9.
 
 ## Status
 
-- **Phase 11 complete: yes, on 9 of 10 criteria.** Criterion 10 (no bench regression) was
-  **not measurable** — the machine sat at load average 15.05 throughout, which is the
-  same reason phases 7 and 10 could not measure it either. See *Numbers*.
-- **This phase completes the port of herdr-sidebar's advertised feature list.**
-  `phases/PARITY.md`'s Source Control section has no `phase N` rows left in it.
-- New tests: **60**, all green (34 daemon, 26 client). The suites this phase touched —
-  `source-control.test.ts` (23) and `sidebar.test.ts` (18) — pass in isolation.
+- **Phase 12 complete: yes, on all 9 criteria.** Including criterion 9, which is the
+  first time in four phases the benchmark was actually run — see *Numbers*.
+- `pnpm test`: **86 files, 1,516 tests**, run to completion at load average 13–15, with
+  the one known flake — `multiplexer.test.ts > splits top/bottom`, `expected 0 to be
+  greater than or equal to 2`, which passes in isolation and is unchanged since phase 10.
+  The run *before* the two post-phase fixes below was 1,505 and completely green.
+- **This phase adds no feature and closes no `PARITY.md` row**, by design. It is the
+  spacing unit, the type hierarchy and the rule for what colour means.
+- New tests: **33**, all in `packages/client/src/chrome.test.ts`, all rendered-buffer.
 
 | # | Criterion | Verdict | Where |
 |---|---|---|---|
-| 1 | `pnpm test` green | met for everything this phase touched; **the full suite was not run to completion at this load** — see *Open threads* | |
-| 2 | each drawer lists what its command returns, empty case included | met | `daemon/src/git-drawers.test.ts`, two fixture repositories |
-| 3 | rows arrive structured; the client never parses a hash out of display text | met, two ways | `client/src/drawers.test.ts` — a decoy-filled subject, plus a source check |
-| 4 | a path with a space survives worktrees and file history | met | `git-drawers.test.ts`, `a file.txt` and a `wt dir` worktree |
-| 5 | `fileHistory` with nothing selected shows a reason | met | daemon returns the note and runs **no** command; client shows it |
-| 6 | every destructive action confirms first; cancelling runs nothing | met | `drawers.test.ts` asserts every `…` entry carries a `confirm`, and only those |
-| 7 | expanding runs exactly one git command; a collapsed refresh runs none | met | `git-drawers.test.ts` `describe('how many commands a drawer costs')` |
-| 8 | remote and worktree rows survive 34 columns with the identifying part | met | `fitRowText`, tested at 32 and 24 columns |
-| 9 | `Fetch` on an unreachable remote fails with a message and does not hang | met | returns in ~1.5 s against an unreachable GitHub URL; `gitEnv`'s guard was already in place |
-| 10 | no regression in `bench/RESULTS.md` | **not measured** | load 15.05; see *Numbers* |
+| 1 | `pnpm test` green | met, full suite, run to completion | 1,505 tests, no failures |
+| 2 | a rendered-buffer test per sidebar state | met — empty, one workspace, four-and-four, hovered, 22 columns, 30 columns | `chrome.test.ts`, `describe('the rhythm is one row')` |
+| 3 | same hue per workspace, different between, surviving restart and reorder | met, seven tests | `describe('hue is identity')` |
+| 4 | every `HitRegions` entry still resolves | met — workspace row, branch row, tab row, agent row (both lines), close `x`, `new`, `▤ files`, `menu`, collapse, grip | `describe('every hit region still resolves')` |
+| 5 | count and `x` absent unhovered, present hovered | met, asserted as buffer text | `describe('… are hover chrome')` |
+| 6 | bold and dim reach the terminal | met, asserted at `encodeFrame`, with a negative control | `describe('bold and dim reach the terminal')` |
+| 7 | nothing truncates at 30 in the four-workspace, four-agent case | met — the whole strip is asserted and contains no `…` | `'30 — the design width'` |
+| 8 | `round` renders `╭╮╰╯`, existing values unchanged | met; `plain`/`heavy`/`ascii` all re-asserted, and `true`/`false` still validate | `describe('pane borders')` |
+| 9 | no regression in `bench/RESULTS.md` | **met, and measured** — A/B against the pre-phase build under the same load | *Numbers* |
 
 ## What exists now
 
-The Source Control view has eight collapsible drawers under the changes list — Graph,
-Commits, File History, Branches, Worktrees, Remotes, Stashes, Tags — each one a single
-`git` command's output arriving as **structured rows**, fetched when the drawer is
-opened and never on a status refresh. Every row type has the context menu herdr-sidebar
-gives it, entry for entry, and every entry whose label ends in `…` opens the existing
-`ConfirmDialog` before anything runs. `Show Changes` is `git show` in a pager pane, like
-every other diff in this project. `Copy …` works, through OSC 52, and says it might not
-have. Three of the menu's entries are not new code at all: `Checkout Branch` is the
-branch picker's `git.checkout`, and a worktree's Open and Remove are phase 5's
-`worktree.open` and `worktree.remove`.
+The workspace strip is **two cards on a tinted surface** with one blank row between
+every entry, instead of eleven consecutive lines of text. A workspace gets a **stable
+colour derived from its id**, and its agents borrow it, so the eye connects an agent to
+its project without reading a word; status gave up the hue and kept the *shape* of its
+dot (`○` idle, `●` working, `◉` blocked) plus the coloured state word. Hierarchy is
+weight — bold name, dim everything subordinate — which `ATTR_BOLD` and `ATTR_DIM` have
+supported since phase 2 and which the chrome had never once set. The pane count and the
+close `x` are drawn on the hovered row only. The default `ui.sidebar-width` is **30**,
+and `ui.pane-borders` is now a name rather than a boolean, defaulting to `round`.
 
-Also, unrelated to the phase and asked for from a screenshot: the workspace strip's
-action row has a **`▤ files` button** between `new` and `menu`, which opens the docked
-file sidebar. The dock previously had no visible way in — `C-b e` opens it and nothing
-on screen said so.
+## Before and after
 
-## Deliverables, as they landed
+Both rendered by the real `renderSidebar`, same fixture — four workspaces, four agents,
+three of them in checkouts — at the old default width of 22 and the new one of 30.
+The `⋮` down the right is the resize grip, which has always been there.
 
-| File | Lines | What |
-|---|---|---|
-| `packages/client/src/drawers.ts` | 538 | drawer state, the row → text rules, the menu table, `drawerCommand` |
-| `packages/daemon/src/git-drawers.ts` | 438 | the eight queries, the parsers, the twelve actions |
-| `packages/daemon/src/git-drawers.test.ts` | 415 | 34 tests, real repositories |
-| `packages/client/src/drawers.test.ts` | 385 | 26 tests |
-| `packages/protocol/src/session-model.ts` | +162 | seven row types, two params, two results |
-| `packages/client/src/app.ts` | +231 | fetch, menus, confirms, the action executor |
-| `packages/client/src/scm.ts` | +147 | hosts the drawers under the changes list |
-| `packages/client/src/clipboard.ts` | 64 | OSC 52, and the sentence that admits it may be ignored |
-| `packages/daemon/src/rpc/git.ts` | +56 | `git.drawer`, `git.drawerAction` |
-| `packages/client/src/chrome.ts` | +46 | the `▤ files` button and its hit span |
-| `packages/daemon/src/git.ts` | +29 | `BRANCH_REF_ARGS`, now shared with the drawer |
+**Before (22 columns, `41aaf24`):**
 
-**PHASE-11's deliverable list named four files; this is eleven.** The extra ones are
-`clipboard.ts` (the phase asked for a decision and the decision was yes),
-`git-drawers.test.ts` / `drawers.test.ts`, and the protocol types, which the phase's
-list folded into the RPC file.
+```
+spaces
+1 * herdr          2 x
+    main ↑1 ●
+  › 1
+    2
+2 · web-dashboard  1 x
+    feat/charts
+3   explore        1 x
+4 ! data-pipeline  1 x
+    main ↓2
+ new   ▤ files   menu
+                      
+agents
+ ! codex
+   blocked · data-pip⋮
+ * claude            ⋮
+   working · herdr   ⋮
+ · claude
+   idle · web-dashboa…
+```
+
+Eleven consecutive lines with no break. Every row carries a count and an `x`. Two of
+four agents say `claude` and nothing else, and both of the lines that would have said
+*which project* are cut off. Colour: every name the same grey, every dot coloured by
+state.
+
+**After (30 columns, this build):**
+
+```
+ spaces
+▌ 1 ● herdr                   
+▌     main ↑1 *               
+▌     › 1                     
+▌       2                     
+                              
+  2 ○ web-dashboard           
+      feat/charts             
+                              
+  3   explore                 
+                              
+  4 ◉ data-pipeline           
+      main ↓2                 
+                              
+ + new      ▤ files      menu⋮
+                             ⋮
+ agents                      ⋮
+    ◉ data-pipeline           
+      blocked · codex         
+                              
+    ● herdr                   
+      working · claude        
+                              
+    ○ web-dashboard           
+      idle · claude           
+```
+
+Rows 0–14 are one card on a `235` background, row 15 is the untinted gutter, row 16
+onward is the second card. `herdr` is pink, `web-dashboard` orange, `explore` tan,
+`data-pipeline` violet — in the strip *and* in the agents list. `▌` is the active
+workspace's selection bar and runs the whole entry. Nothing truncates.
+
+**After (22 columns, same build)** — the design narrows rather than becoming a
+different layout; only the agent's tool line is cut:
+
+```
+ spaces
+▌ 1 ● herdr           
+▌     main ↑1 *       
+▌     › 1             
+▌       2             
+                      
+  2 ○ web-dashboard   
+      feat/charts     
+                      
+  3   explore         
+                      
+  4 ◉ data-pipeline   
+      main ↓2         
+                      
+ + new  ▤ files  menu⋮
+```
 
 ## Types and contracts the next phase depends on
 
-Two new methods on `AgentMethodMap`, both in `AGENT_METHODS`:
-
 ```ts
-'git.drawer':       { params: GitDrawerParams;       result: GitDrawerResult }
-'git.drawerAction': { params: GitDrawerActionParams; result: GitDrawerActionResult }
+// packages/client/src/palette.ts — new
+export const WORKSPACE_HUES: readonly number[]      // 8 entries, 256-colour cube
+export function hashId(id: string): number          // FNV-1a, 32-bit, via Math.imul
+export function workspaceHue(id: string): number    // the hue an id prefers
+export function workspaceHues(ids: readonly string[]): Map<string, number>
+
+// packages/tui/src/widgets/block.ts
+export const ROUND_BORDER: BorderChars              // ╭ ╮ ╰ ╯ with PLAIN's rules
+
+// packages/core/src/config.ts
+export type PaneBorderStyle = 'plain' | 'round' | 'off'
+interface UiConfig { readonly paneBorders: PaneBorderStyle /* was boolean */ }
+// DEFAULT_CONFIG.ui.sidebarWidth: 22 -> 30
+// DEFAULT_CONFIG.ui.paneBorders:  true -> 'round'
+
+// a new schema scalar, for any key that used to be a boolean and is now a name
+type Scalar = … | { kind: 'flag-enum'; values: readonly string[]; whenTrue: string; whenFalse: string }
+
+// packages/client/src/chrome.ts — renderSidebar's signature changed
+export interface SidebarOptions {
+  readonly hoverRow?: number
+  readonly hoverEnabled?: boolean       // [general] mouse-hover
+  readonly dockRight?: boolean
+  readonly summaries?: ReadonlyMap<string, GitRepoSummary>
+}
+export function renderSidebar(
+  buffer: ScreenBuffer, area: Rect, state: SessionStateSnapshot,
+  palette: Palette, hits: HitRegions, options?: SidebarOptions
+): void
+export interface Palette { /* … */ readonly card: Style }   // new field
+export const CARD_SURFACE = 235
+
+// packages/client/src/model.ts — the glyph table, unchanged in shape
+const STATUS_GLYPHS = { idle: '○', working: '●', blocked: '◉', unknown: '?', done: '✓' }
 ```
 
-### The row types, and their wire shapes
+`HitRegions` is **unchanged**. Every field it had, every field's shape, and every
+consumer in `app.ts` still works — which is what the 33 new tests are for.
 
-```ts
-type GitDrawerId =
-  | 'graph' | 'commits' | 'fileHistory' | 'branches'
-  | 'worktrees' | 'remotes' | 'stashes' | 'tags'
+## The design rules, as they landed
 
-interface GitCommitRow {
-  kind: 'commit'
-  hash: string        // full, 40 hex; every commit action takes this
-  short: string       // what is shown
-  subject: string
-  refs: readonly string[]   // %D split on ', ' — 'HEAD -> main', 'tag: v1.0'
-  date: string        // %ad under --date=short, or ''
-  rail: string        // git's own --graph art, empty for the other two log drawers
-}
-interface GitRailRow    { kind: 'rail'; rail: string }
-interface GitBranchRow  { kind: 'branch'; name: string; current: boolean; remote: boolean }
-interface GitWorktreeRow {
-  kind: 'worktree'; path: string; name: string
-  branch: string | null; head: string | null; primary: boolean
-}
-interface GitRemoteRow  { kind: 'remote'; name: string; url: string }
-interface GitStashRow   { kind: 'stash'; index: number; ref: string; hash: string; subject: string }
-interface GitTagRow     { kind: 'tag'; name: string }
+**1. Hue is identity; fill and weight are state.**
 
-type GitDrawerRow =
-  | GitCommitRow | GitRailRow | GitBranchRow | GitWorktreeRow
-  | GitRemoteRow | GitStashRow | GitTagRow
+Eight hues from the 256-colour cube: `39` azure, `43` teal, `77` green, `220` yellow,
+`208` orange, `205` pink, `135` violet, `180` tan. **None of them is red**, because red
+is `agent-blocked` — the one colour in the program that means "this is waiting on you" —
+and a workspace that hashed to it would look urgent for its whole life. A test asserts
+that.
 
-interface GitDrawerParams extends GitTargetParams {
-  drawer: GitDrawerId
-  path?: string        // fileHistory only, repo-relative
-  limit?: number       // default DRAWER_LIMIT = 30
-}
-interface GitDrawerResult {
-  drawer: GitDrawerId
-  rows: readonly GitDrawerRow[]
-  note: string | null   // 'no commits yet', 'select a file to see its history'
-}
+The hue comes from FNV-1a of the workspace **id**, which `persist.ts` writes and
+`restoreSession` reads back unchanged. A bare hash would have been perfectly stable and
+frequently useless: with eight hues and four workspaces, the birthday bound says two of
+them share a colour **59% of the time**. So `workspaceHues` walks the ids **in sorted
+order** — not display order — and each takes its preferred hue or the next free one.
+That buys:
 
-type GitDrawerActionId =
-  | 'commit.checkout' | 'commit.cherryPick' | 'commit.revert' | 'commit.reset'
-  | 'branch.merge'    | 'branch.delete'
-  | 'stash.apply'     | 'stash.pop'         | 'stash.drop'
-  | 'remote.fetch'
-  | 'tag.checkout'    | 'tag.delete'
+- every workspace a distinct hue, guaranteed, up to eight of them;
+- survival of a **restart**, because the ids are persisted;
+- survival of a **reorder**, because `workspaceOrder` is never read.
 
-interface GitDrawerActionParams extends GitTargetParams { action: GitDrawerActionId; ref: string }
-interface GitDrawerActionResult { message: string; status: GitStatusResult }
+What it does not survive is *creating or closing* a workspace whose id collides with an
+existing one — that workspace's neighbour may move one hue along. That is the trade, and
+it is the right way round: a colour that is always unique and occasionally shifts beats
+one that never moves and is a coin flip.
+
+**2. The spacing unit is one row.** One blank row between entries, one above a section
+header, none below it. It is implemented as *a blank before each entry except the
+first*, which is the same rule with no trailing blank and no special case. The header at
+the very top of the strip is the only row with no blank above it, because there is
+nothing above it to separate it from.
+
+**3. Hierarchy is weight.** Bold for a thing's name, dim for everything subordinate —
+the section headers, the workspace number, the branch line, the second line of an agent,
+the action row. Criterion 6 is asserted at `encodeFrame`, not at the style object, with
+a negative control that renders a weightless buffer and asserts the SGR is *absent*.
+
+**4. Chrome appears when it is relevant.** The count and the `x` are on the hovered row.
+The **workspace number is not chrome** and stays, dimmed, in a fixed two-column gutter,
+because it is a key you can press.
+
+**5. A section is a card.** `Palette.card` is a new derived style: a named theme's
+`tab-idle-bg` (its `surface` role, one step off its base), or `235` when the theme has
+none. The gutter row between the two cards is the *sidebar's* background, not either
+card's, which is what makes them read as two panels rather than one list with a gap.
+
+**6. 30 columns.** The dock's own minimum has been 34 since phase 7; 30 is the nearest
+number the workspace strip can justify without taking a third of an 80-column screen —
+where `app.ts` caps it at 26 anyway.
+
+## The grid
+
+Everything in the strip is drawn on five columns and nothing is drawn anywhere else:
+
+```
+ 0      MARK_X     ▌ on the active workspace's entry; the card's left padding otherwise
+ 1-2    INDEX_X    the workspace number, right-aligned, dim
+ 4      DOT_X      the status dot, in the workspace's hue
+ 6      BODY_X     names, branches, tabs, tasks
+ width-1  RIGHT_PAD  kept clear; the resize grip lives here
 ```
 
-**`note` is how a drawer says something other than "here are rows".** An empty list with
-a null note is an empty drawer, which is the normal state of Stashes and Tags and must
-not read as a failure.
+## What moved to hover-only, and what did not
 
-### The services
+| | Then | Now |
+|---|---|---|
+| pane count | every workspace row | hovered row |
+| close `x` | every workspace row (when > 1 workspace) | hovered row |
+| workspace number | every row | unchanged — it is `C-b <n>` |
+| status dot | every row | unchanged, but hue-coloured and shape-coded |
+| branch line | when known | unchanged |
+| `new` / `▤ files` / `menu` | always | unchanged — a toolbar, not a row of chrome |
+| pane border buttons `◨ ⬓ ✕` | every pane, always | **unchanged, deliberately** — see *Open threads* |
 
-```ts
-// daemon
-const DRAWER_LIMIT = 30                       // herdr-sidebar's scm_app.rs:43
-const DRAWER_IDS: readonly GitDrawerId[]      // display order
-function drawerArgs(query: DrawerQuery): string[] | null   // null = nothing to ask git
-function parseCommitLines(stdout: string): GitDrawerRow[]
-function parseRemotes(stdout: string): GitRemoteRow[]
-function parseStashes(stdout: string): GitStashRow[]
-function parseTags(stdout: string): GitTagRow[]
-function isCommitHash(value: string): boolean   // herdr's hex rule, as a *validator*
-function isStashRef(value: string): boolean
-function worktreeName(path: string): string
-class GitDrawerService {
-  constructor(options?: { git?: GitRunner })
-  rows(cwd: string, query: DrawerQuery): Promise<{ rows; note }>
-  act(cwd: string, action: GitDrawerActionId, ref: string): Promise<string>
-}
-const BRANCH_REF_ARGS: readonly string[]      // now in git.ts, read by both callers
-
-// client
-class DrawersPanel {
-  isExpanded(id): boolean
-  expandedIds(): GitDrawerId[]
-  toggle(id): boolean      // true = the caller must fetch
-  expand(id): boolean; collapse(id): boolean; reload(id): void
-  adopt(result: GitDrawerResult): void; fail(id, message): void
-  lines(): DrawerLine[]
-}
-function rowText(row): string
-function fitRowText(row, width): string        // criterion 8 lives here
-function prettyRemoteUrl(url): string          // owner/repo, whatever the spelling
-function prettyWorktree(row): string           // folder + ⎇ branch, never a path
-function drawerMenu(row): MenuItem[]
-function drawerCommand(row, menuId): DrawerCommand | null
-function copyToClipboard(write, text, what): { sent: boolean; message: string }
-function osc52(text): string
-```
-
-`ScmPanel` gained `readonly drawers: DrawersPanel`, two `ScmOutcome` arms
-(`drawer`, `drawerMenu`) and two new `Row` kinds; `HitRegions.actionRow` gained
-`files: { x, end } | null`.
-
-## The decisions PHASE-11 asked for
-
-**1. The Branches drawer and the branch picker share one RPC — deliberately.**
-herdr-sidebar's drawer runs `branch -a --sort=-committerdate --format='%(HEAD)
-%(refname:short)'`. Ours runs the picker's `for-each-ref`, now `BRANCH_REF_ARGS` in
-`git.ts` and read by both. Two reasons, and the second is the real one: `branch -a`
-hands back display text that would have to be un-rendered into the same three fields we
-already have, and it **cannot say whether a ref is symbolic** — so `origin/HEAD` would
-appear as a row whose `Checkout Branch` entry silently detaches HEAD at a branch nobody
-picked. The drawer slices the shared result to 30.
-
-**2. Clipboard: OSC 52, and it says so.** The four `Copy …` entries are kept. OSC 52 is
-the terminal-native answer and it is the one that works over SSH — `pbcopy` spawned on
-a server copies into the server's clipboard, which nobody can paste from. It has **no
-reply**, and some terminals discard it, so the note reads *"hash sent to clipboard (OSC
-52 — ignored by some terminals)"* rather than "copied". The phase's alternative was
-dropping the entries; an entry that quietly does nothing is the failure both options
-were avoiding.
-
-**3. PHASE-7's follow-ups were already applied, and this phase inherits all three.**
-`GIT_OPTIONAL_LOCKS=0`, the locale pinning and the credential-prompt guard are in
-`gitEnv` in `worktree.ts`, which `runGit` uses — so every one of the nine new git
-invocations gets them for free, which is exactly the argument PHASE-11 made for doing it
-in the runner. **Nothing was left to apply.** What remains from PHASE-7's list is the
-part nobody has done: follow-up 4 (`maxBuffer` → streaming with `spawn`) and follow-up 5
-(`--porcelain=v2`), both still open and both untouched here.
-
-## Surprises
-
-- **`git log --graph --oneline` is a display format, and PHASE-11 says not to re-parse
-  display text.** Those two facts collide, and the resolution is the one thing this
-  phase does that is not herdr-sidebar's command verbatim: the log drawers run
-  `--format=%x00%H%x00%h%x00%D%x00%ad%x00%s`. The leading NUL is load-bearing —
-  everything before the first NUL on a line is the rail git drew, and a line with **no**
-  NUL is pure art (`|\`, `|/`) and becomes a `rail` row. So the rails still come from
-  git, drawn exactly as given, and the hash arrives as a field. It is the same
-  `git log --graph`; only the format is ours.
-- **`:(top)` is what makes a drawer cost one git command.** Every other query works from
-  any directory inside a checkout, but `--follow` needs a pathspec, and a repo-relative
-  path means nothing from a subdirectory. Pathspec magic fixes it:
-  `-- ':(top)a file.txt'` resolves against the top of the working tree wherever the
-  pane's shell happens to be. Verified from a subdirectory, and with a space in the
-  name. Without it every drawer would have paid for a `rev-parse --show-toplevel` first
-  and criterion 7 would have been "two commands".
-- **`git revert` refuses a merge commit, and that is the right answer to relay.**
-  `-m 1` is a decision about which parent's history to keep, and a menu entry with
-  nowhere to ask must not make it. git's own sentence says exactly that; a test asserts
-  we pass it through rather than guessing a side.
-- **`git log` has no stable order for commits sharing a timestamp**, which a test that
-  builds four commits in 300 ms discovers immediately. The assertion is the set, plus
-  "the merge is first".
-- **The changes list's "no changes" had to become a row.** It used to be a message drawn
-  *instead of* the list, and with eight drawers under it the list is never empty, so the
-  message would never have appeared again.
-- **`branch -d`, not `-D`.** The confirmation is about deleting a branch, not about
-  losing commits. git's refusal names the unmerged branch and the flag that would force
-  it, which is more than the dialog could say. Same instinct as `reset --mixed`: no menu
-  entry in this project passes `--hard`.
+**With `[general] mouse-hover = false` the chrome falls back to the active workspace
+row** rather than vanishing. Without that, somebody who turned hover off would have no
+close target at all, and the option is about repaint cost, not about wanting less UI.
 
 ## Numbers
 
-**Criterion 10 was not measured.** `uptime` reported load average **15.05** for the
-whole session, and the previous two handoffs record the same obstacle. What can be said
-without the benchmark: the only render-path change is in `renderScmPanel`, which gained
-one branch per drawn row and one `fitRowText` call per *drawer* row — bounded by the
-dock's height (tens of rows), against a pane renderer that handles thousands of cells.
-Nothing in `app.ts`'s geometry or the pane path was touched.
+**Criterion 9 was measured, as an A/B against the pre-phase build.** The committed
+`bench/RESULTS.md` was recorded on a quiet machine on a different day; this machine sat
+at load average **11.8–12.8** all session, so comparing against that table would have
+measured the load and not the change. Instead the phase-12 tree was stashed, rebuilt at
+`41aaf24`, benchmarked, restored, rebuilt and benchmarked again — **two runs six minutes
+apart at the same load**, same config (the benchmark still pins `sidebar-width = 22`, on
+purpose, so both runs draw the same pane geometry).
 
-`bench/RESULTS.md` still has the defect two handoffs have now named: **the generator
-destroys its hand-written sections**. `git checkout -- bench/RESULTS.md` after any run.
-This is the third handoff to say so; the fix is code, not another sentence here.
+| Scenario | paint p50 before → after | frame p50 before → after |
+|---|---|---|
+| Single active | 0.57 ms → **0.51 ms** | 0.89 ms → **0.75 ms** |
+| Realistic 15 | 0.55 ms → **0.53 ms** | 2.18 ms → **2.18 ms** |
+| Stress, visible | 0.55 ms → **0.54 ms** | 3.69 ms → **3.67 ms** |
+| Stress, 14 hidden | 0.36 ms → **0.36 ms** | 3.11 ms → **3.18 ms** |
+
+`paint` is the number this phase can move: compose + diff + encode, the client's own
+code. It did not move. `p99` is not tabulated because at this load it is measuring the
+machine — it ranged 8–19 ms on *both* builds, above the 3.24 ms the quiet-machine table
+records, in the same way for old code and new.
+
+Cells repainted per frame are unchanged (14 / 25 / ~1,600 / 13), which is the structural
+answer: the sidebar is at most a few dozen cells of a 200×50 screen, and the diff only
+sends what changed.
+
+**`bench/RESULTS.md` is left at its committed contents.** Writing load-12 numbers into
+it would have looked like a catastrophic regression against the quiet-machine baseline
+and would have destroyed the hand-written sections — which is the defect three handoffs
+have now named. `git checkout -- bench/RESULTS.md` after any run; **the fix is code, not
+a fourth sentence here.**
+
+## Surprises
+
+- **`git log`-style display text was phase 11's trap; this phase's was the colour a
+  terminal has.** A card is a background tint, and there is no way to ask a terminal
+  whether its background is light or dark. `235` is a *dark* answer, chosen because the
+  default theme already assumes dark (`sidebar-fg = 7` on `sidebar-bg = -1` is white on
+  the terminal's own background). It is stated rather than hidden, and anyone on a light
+  terminal who sets `[theme] name` gets a card in their theme's real surface colour.
+- **A stable hash is not a palette.** The birthday bound is the whole reason
+  `workspaceHues` takes a list instead of one id. This was going to be a one-line
+  `hues[hash % 8]` until the arithmetic was done.
+- **`▌` down the entry replaced the accent background for "active".** A full-width
+  accent row fought the card tint underneath it, and it would have had to overwrite the
+  workspace's hue on the one row where identity matters most. The bar says selection
+  *in* the hue, which is both facts in one column and no colour spent.
+- **Agents show the workspace, not the pane title.** PHASE-12 item 8 says "the pane
+  title is not an identity", and following it literally means the title is not drawn at
+  all: line one is the project in the project's hue, line two is `<state> · <tool>`.
+  Phase 11's `task · tool` was the window title Claude Code sets, which is the same word
+  four times for four Claude panes.
+- **The grip lands in the right padding column, which the action row's `menu` used to
+  own.** `menu ` had a trailing space that the grip overwrote. `RIGHT_PAD` is now
+  respected by the action row and by the hover chrome, so the grip has a column of its
+  own on every row. The rendered-buffer tests read `drawn.body`, which is every row
+  minus its last column, so a snapshot of the *design* does not move when the strip gets
+  a row taller and the grip lands somewhere else.
+- **The collapsed rail is the one place status keeps a hue**, and it has to be: three
+  columns hold a number and a dot, so identity has nowhere to go and state has nothing
+  else to ride on.
+- **The integration harness waited for `┌`.** `waitForReady` could not start a client
+  configured for round borders. It waits for `│` now, which is in both sets.
 
 ## Open threads deliberately left
 
-- **The full `pnpm test` was not run to completion at this load.** The four suites this
-  phase touches were run and pass; `source-control.test.ts` failed once when four suites
-  ran concurrently at load 15 and passed alone — the harness's `waitForText('$ ')`
-  losing a race, the same shape as the `multiplexer.test.ts` flake below. **Run
-  `pnpm test` on a quiet machine before trusting the 1,389 + 60 figure.**
-- **No end-to-end drawer test through `TuiHarness`.** The keystroke-level path — open
-  the git view, walk to Stashes, `m`, cancel — is covered by unit tests on both sides of
-  the wire but not by a test that drives the assembled program. It was cut for time, not
-  for a reason; it is the obvious next test to write.
-- **`multiplexer.test.ts` is still flaky and still undiagnosed.** Unchanged from phase
-  10: roughly 1 run in 6 at load 12, `expected 0 to be greater than or equal to 2`.
-- **No drawer refresh on its own.** Same rule as phase 7: nothing polls. A `git commit`
-  run in the pane behind the panel needs `r`, which now re-reads the status and every
-  *open* drawer and nothing else.
-- **`Show Changes` is still a pager pane.** Phase 9 owns the in-panel diff question and
-  did not reverse it; this phase did not reopen it.
-- **The drawers are cramped in `unified` layout.** They live in the lower half of the
-  Explorer view, which grows when a drawer is open but is capped at half the body. The
-  `separate` layout (`3`, or `C-b g`) is where they are meant to be read.
-- **No `git` command outside PHASE-11's table.** No rebase UI, no branch or tag
-  creation, no push from the Remotes drawer, no conflict resolution. The failure mode
-  of this phase was becoming a git client and it did not.
-- **Everything in phase 10's *Open threads* that was not about plugins is still open**:
-  `follow-pane` unwired, no syntax highlighting, no `rg`/`bat`/`glow`/`delta` on this
-  machine, `DaemonClient` has no request timeout, and phase 5's criterion 2 (detection
-  against a running agent) is still the important gap.
+- **`◨ ⬓ ✕` are still drawn on every pane at all times.** PHASE-12 item 7 names this,
+  and rule 4 ("chrome appears when it is relevant") would say hover-only — but the
+  deliverables for item 7 are `ROUND_BORDER` and nothing else, they are the only pointer
+  route to split or close a pane, and `mouse-hover` can be turned off. It is the obvious
+  next application of rule 4 and it needs the same fallback the sidebar's chrome got.
+- **`ui.pane-borders` does not expose `heavy` or `ascii`**, although `HEAVY_BORDER` and
+  `ASCII_BORDER` have existed in `block.ts` since phase 2 and the enum would have cost
+  two words. Exposing them is a feature, and this phase's list says no new features.
+  They are still unreachable from a config file.
+- **Nine or more workspaces share hues**, in id order, once the probe runs out of free
+  slots. Eight was chosen because the cube has no more than about eight hues that are
+  all legible on a dark card *and* distinct from each other and from red.
+- **Two agents in one workspace draw two identical rows**, differing only in order. Each
+  still clicks through to its own pane. There is no column for a third fact at 30.
+- **The `agents` card has no `grouped` toggle**; still a `PARITY.md` orphan, and
+  explicitly out of scope here.
+- **`multiplexer.test.ts` is still flaky and still undiagnosed.** It passed in the full
+  run; it failed once per run when run alone twice in a row, on a different test each
+  time. Unchanged from phases 10 and 11.
+- **`RESULTS.md`'s generator still destroys its hand-written sections.** Fourth handoff
+  to say so.
+- **Everything in phase 11's *Open threads* is still open**: no end-to-end drawer test
+  through `TuiHarness`, no drawer refresh on its own, `Show Changes` is still a pager
+  pane, `follow-pane` is unwired, no syntax highlighting, `DaemonClient` has no request
+  timeout, and phase 5's criterion 2 (detection against a running agent) is still the
+  important gap.
+- **The uncommitted `[sidebar] open-with` work was already in the tree when this phase
+  started** (`editor.ts`, `editor.test.ts`, and changes across `app.ts`, `scm.ts`,
+  `git.ts` and the protocol). It is not phase 12's; it now carries the fix below and is
+  at 22 tests.
+- **Whether `auto` should open a *local* editor from a plain terminal is unanswered.**
+  `editor.ts` refuses to guess, and its argument is about SSH — where there is no window
+  to open a file in. On a local Terminal.app with VS Code installed the refusal is
+  arguably wrong, and the user hit exactly that. The message now names the one-line fix
+  instead of deciding for them.
+- **The explorer tree can still be rooted somewhere surprising**, which is how defect 2
+  was reached — a tree rooted at `/` with full-looking row paths. Rooting at the pane's
+  directory is by design and was not changed; what was fixed is that the preview now
+  honours whatever root the tree was listed with.
 
-## Three defects fixed after the phase, all reported from screenshots
+## Two defects fixed after the phase, both reported from screenshots
 
-These are not PHASE-11 work. They were found by looking at the running program while
-the phase was being reviewed, and each one had been shipped for several phases.
+Neither is phase 12 work. Both were found by looking at the running program.
 
-**1. The dock kept the keyboard from the panes it opened.** `⏎` on a file opens it in
-`$PAGER` and focuses that pane — and then every keystroke still went to the dock,
-because `handleKey` routed to the panel for as long as it was open. A pager that cannot
-scroll is not an opened file. The same bug made the `$EDITOR` entry, the diff pane, the
-shell-here entry and `Open Worktree` all open something unusable. Phase 10's handoff saw
-the symptom on click-spawned panes and read it as a reason not to spawn them; this was
-the cause. `TuiApp.dockFocused` now exists: the dock keeps the keyboard while you work
-in it and releases it (`releaseDock`) the moment it opens a pane, staying on screen,
-dimmed. `C-b e` / `C-b g` / `C-b f` or a click take it back — and `C-b e` on an
-unfocused dock now *focuses* it rather than closing it.
+**1. Clicking a changed file did nothing, and said nothing.** `[sidebar] open-with`
+defaults to `auto`, which means "the editor this terminal belongs to" — and from a plain
+Terminal.app there is none, so `resolveExternalEditor` returned null and
+`openInExternalEditor` returned silently *by design*, with a comment saying so. A no-op
+that gives no feedback is indistinguishable from a broken click, which is exactly how it
+was reported. This project already settled that argument once, over `Copy …` and OSC 52,
+and came down on the side of saying so.
 
-**2. The Preview view drew a file in 34 columns.** The dock's width was capped at
-`cols/3` for every view. Three of the four views are lists of paths and are fine there;
-the fourth is a file, and the result was a column of `…` next to two idle shells with
-three quarters of the screen empty. `SidebarPanels.preferredWidth` now answers per
-view: lists get the old behaviour, Preview asks for `34 + 1 + 80` capped at **half** the
-screen, and `previewAreas` puts the tree back on the left when the body is at least
-107 columns. Clicking a row in that tree previews it beside itself — which is
-herdr-sidebar's actual shape, and closes `PARITY.md`'s largest orphan.
+`explainNoEditor(env, options)` is new in `editor.ts`. It tells the three causes apart
+and names the line that fixes each:
 
-**3. The workspace list said less than it knew.** Three changes, all rendering except
-the first:
-
-- **`git.summary`** — a new RPC, `{ paths[] } → { summaries[] }`, one
-  `status --porcelain -z --branch --untracked-files=no` per directory, parsed with the
-  panel's own `parseStatus` so the two can never disagree. It draws the branch and
-  ahead/behind under each workspace name. Fetched when the workspace set or their cwds
-  change and after a dock git action; **never polled**, and keyed so an ordinary
-  snapshot costs a string comparison.
-- The agent status glyph **leads** the workspace row instead of sitting between the
-  name and the pane count, where it read as part of the numbers.
-- Agent rows are now `<task> · <tool>` over `<state> · <workspace name>`. They were
-  `<tool>` over `<pane title>` with the workspace as a right-aligned *number*, which
-  printed `claude` four times down a list of four agents and made the one thing that
-  distinguishes them the dim half.
-
-```ts
-interface GitRepoSummary {
-  path: string; isRepo: boolean; branch: string
-  ahead: number; behind: number; hasUpstream: boolean
-  dirty: boolean          // tracked changes only; untracked files do not count
-}
-'git.summary': { params: { paths: readonly string[] }; result: { summaries: readonly GitRepoSummary[] } }
-
-// client
-class SidebarPanels {
-  preferredWidth(cols: number, configured: number): number
-  previewAreas(body: Rect): { tree: Rect | null; preview: Rect }
-  previewWidth(area: Rect): number
-}
-renderSidebar(..., dockRight?: boolean, summaries?: ReadonlyMap<string, GitRepoSummary>)
-```
-
-**None of the three has a test.** They were verified by rendering the sidebar into a
-buffer and reading it, and by the existing 18 sidebar and 23 source-control tests still
-passing. The geometry (`preferredWidth`, `previewAreas`) is pure and is the obvious
-thing to pin down first.
-
-## The sidebar mock-up, since it came up
-
-A mock-up was shown alongside the running app and the difference is worth writing down
-rather than rediscovering:
-
-| In the mock-up | Here |
+| Cause | What the panel now says |
 |---|---|
-| a `spaces` section header | **built after the phase** |
-| a **branch line under each workspace** (`main ↑1`) | **built after the phase** — `git.summary`, see above |
-| a status dot per workspace | **built** — `workspaceAgentStatus` + `agentGlyph`, drawn between the name and the pane count. It is blank because nothing in that session had a detected agent |
-| an `agents` section, two lines per agent | **built** — `renderAgentSection` in `chrome.ts`. It renders only when `agentEntries(state)` is non-empty, i.e. when a pane has both `agent` and `agentStatus` set by detection. A plain shell sets neither, so the section is skipped entirely |
-| a `grouped` toggle on that section | not built; now an orphan in `PARITY.md` |
-| workspaces named `acme-app`, `acme-api` | works today — a workspace with a label shows it; `workspaceTitle` falls back to `workspace N` |
+| a plain terminal, `code` installed | ``no editor for this terminal — set `[sidebar] open-with = "code"` `` |
+| a plain terminal, nothing known installed | `… set [sidebar] open-with to your editor's command` |
+| a Cursor terminal, `cursor` not on PATH | ``this looks like a Cursor terminal, but `cursor` is not on PATH`` |
+| `open-with = "coed"` | ``` `open-with = "coed"` is not on PATH ``` |
+| `open-with = "off"` | nothing — that no-op was asked for |
 
-Of the six, four are now built, one (`grouped`) is not and is recorded as an orphan,
-and the agents section turned out to have been working all along — it only ever needed
-a pane with a detected agent in it, which a plain shell is not.
+A test asserts `resolveExternalEditor` returning null and `explainNoEditor` returning a
+reason are **the same condition**, so the silent click cannot come back. That cross-check
+caught a real bug in the first draft, which explained itself even when resolution was
+about to succeed.
+
+**The behaviour itself was not changed.** `auto` still refuses to guess at an editor in
+a terminal that does not belong to one — `editor.ts` argues that over SSH there is no
+window to open a file in — so from a plain terminal the fix is still one config line.
+Whether `auto` should fall back to a locally installed editor is a live question and was
+not answered here.
+
+**2. The preview could resolve a path against the wrong root.** Reported as
+`path escapes the root: Users/ashoknaik/…/CODE_OF_CONDUCT.md` — a tree row path from a
+tree rooted at `/`, checked against a different root entirely.
+
+`fs.list` and `preview.read` both call `resolveRoot`, and `rpc/preview.ts`'s header
+claimed that made them agree. It does not: they call it at **different moments**, and it
+answers "where is the focused pane *now*". Between listing a tree and clicking a row in
+it, a shell can `cd` and focus can move to a pane in another repository — and then a
+path relative to the first root is resolved under the second. The lucky outcome is the
+refusal above; the unlucky one is previewing a different file that happens to have that
+name.
+
+The client already had the right answer and was throwing it away. `PreviewReadParams`
+gained an optional `root`, the client sends `panels.explorer.root` (the root that
+listing came back with), and the daemon prefers it, falling back to `resolveRoot` when
+it is absent. It grants no access the `cwd` field on `GitTargetParams` did not already
+grant. Three tests in `packages/daemon/src/preview.test.ts` pin it, including one that
+reproduces the original failure with the root left off.
+
+`resolveWithin`'s refusal also now names **the root it checked against**, not just the
+path. Which half is wrong is unanswerable without both, and it is usually the root.
 
 ## Getting started in a new session
 
@@ -367,9 +422,12 @@ pnpm build
 ln -s "$PWD/packages/client/dist/main.js" ~/.local/bin/leap-chorus
 pnpm test                                    # do not run anything alongside it
 
+# the design, without a terminal — 33 tests, milliseconds
+npx vitest run packages/client/src/chrome.test.ts
+
 leap-chorus                                  # C-b e files · C-b f search · C-b g git · 1/2/3/4
+#   the workspace strip: 30 columns, two cards · hover a row for its count and `x`
 #   in the git view: ↑↓ move · ⏎ open a drawer · →← open/close · m row menu · r refresh
-#   the workspace strip's action row: new · ▤ files · menu
 
 uptime && node bench/dist/render-scale.js --seconds 15
 git checkout -- bench/RESULTS.md             # THE BENCHMARK DESTROYS IT

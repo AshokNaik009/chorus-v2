@@ -291,8 +291,9 @@ mouse-hover = true      # highlight the sidebar row under the pointer (needs DEC
 
 [ui]
 sidebar = true
-sidebar-width = 22
+sidebar-width = 30      # the workspace strip is designed at 30; 22 still works
 tab-bar = true
+pane-borders = "round"  # or "plain" (the old square corners), or "off"
 
 [theme]
 name = "catppuccin"     # or set individual roles below

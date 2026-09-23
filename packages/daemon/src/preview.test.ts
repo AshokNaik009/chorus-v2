@@ -20,6 +20,7 @@ import { mkdtemp, rm, writeFile, appendFile, mkdir, symlink } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { previewRead, type PreviewContext } from './rpc/preview.js'
 import {
   BINARY_PROBE_BYTES,
   PreviewService,
@@ -295,6 +296,16 @@ describe('staying inside the root', () => {
     await expect(service.read(root, '../outside.txt', 34)).rejects.toThrow(/escapes the root/u)
   })
 
+  it('names the root it was checked against, not just the path', async () => {
+    // The refusal reached a user as `path escapes the root: Users/ashoknaik/…` — a path
+    // that had lost its leading slash, checked against a root nobody was told. Which
+    // half is wrong is unanswerable without both, and it is usually the root.
+    const service = new PreviewService({ capture: absent })
+    await expect(service.read(root, '../outside.txt', 34)).rejects.toThrow(
+      /escapes the root: \.\.\/outside\.txt \(root \/.+\)/u
+    )
+  })
+
   it('refuses an absolute path', async () => {
     const service = new PreviewService({ capture: absent })
     await expect(service.read(root, '/etc/hosts', 34)).rejects.toThrow(/relative path/u)
@@ -324,5 +335,68 @@ describe('staying inside the root', () => {
     await writeFile(join(root, 'a.txt'), 'yes\n')
     const service = new PreviewService({ capture: absent })
     expect((await service.read(root, 'sub/../a.txt', 34)).lines).toEqual(['yes'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The RPC: which root a relative path is measured against
+// ---------------------------------------------------------------------------
+
+describe('preview.read roots the path where the caller says (bug: path escapes the root)', () => {
+  /**
+   * A context whose pane has since moved somewhere else.
+   *
+   * That is the whole bug in one object: the tree was listed against one root, the
+   * pane `cd`-ed (or focus moved to a pane in another repository), and the preview
+   * re-derived a root from the pane. A path relative to the first root means nothing
+   * under the second.
+   */
+  function contextRootedAt(paneCwd: string): PreviewContext {
+    return {
+      preview: new PreviewService({ capture: absent }),
+      git: { repoRoot: async () => paneCwd } as unknown as PreviewContext['git'],
+      drawers: {} as PreviewContext['drawers'],
+      suggest: {} as PreviewContext['suggest'],
+      fs: {} as PreviewContext['fs'],
+      paneCwdInput: () => ({ shellPid: null, recorded: paneCwd })
+    }
+  }
+
+  it('reads the file under the root it was given, not the one the pane is in now', async () => {
+    await writeFile(join(root, 'CODE_OF_CONDUCT.md'), '# be nice\n')
+    const elsewhere = await mkdtemp(join(tmpdir(), 'leap-elsewhere-'))
+    try {
+      const context = contextRootedAt(elsewhere)
+      const result = await previewRead(context, {
+        paneId: 'p1',
+        root,
+        path: 'CODE_OF_CONDUCT.md',
+        width: 34
+      })
+      expect(result.lines).toEqual(['# be nice'])
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true })
+    }
+  })
+
+  it('falls back to the pane when no root is sent, which is what every old caller gets', async () => {
+    await writeFile(join(root, 'a.md'), 'from the pane\n')
+    const result = await previewRead(contextRootedAt(root), { paneId: 'p1', path: 'a.md', width: 34 })
+    expect(result.lines).toEqual(['from the pane'])
+  })
+
+  it('without the root, the pane having moved is the reported failure', async () => {
+    // The exact shape the user hit: a tree row path, resolved against a root that is
+    // no longer the one it was computed from.
+    await writeFile(join(root, 'CODE_OF_CONDUCT.md'), '# be nice\n')
+    const elsewhere = await mkdtemp(join(tmpdir(), 'leap-elsewhere-'))
+    try {
+      const context = contextRootedAt(elsewhere)
+      await expect(
+        previewRead(context, { paneId: 'p1', path: 'CODE_OF_CONDUCT.md', width: 34 })
+      ).rejects.toThrow(/no such file|escapes the root/u)
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true })
+    }
   })
 })

@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   GitService,
   dropNested,
+  firstHunkLine,
   parseAheadBehind,
   parseBranch,
   parseBranches,
@@ -567,5 +568,77 @@ describe('branches, checkout and sync', () => {
     writeFileSync(join(root, 'a.txt'), 'a')
     commitAll(root, 'first')
     await expect(service.sync(root)).rejects.toThrow()
+  })
+})
+
+describe('firstHunkLine', () => {
+  it('takes the new-side start of the first hunk', () => {
+    expect(firstHunkLine('@@ -40,0 +42,3 @@ function x()\n+a\n+b\n')).toBe(42)
+  })
+
+  it('ignores everything above the first hunk header', () => {
+    const diff = [
+      'diff --git a/src/app.ts b/src/app.ts',
+      'index 1e7f2c9..5b0e2f6 100644',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      '@@ -7 +7 @@',
+      '-old',
+      '+new',
+      '@@ -99 +99 @@',
+      '-x',
+      '+y'
+    ].join('\n')
+    expect(firstHunkLine(diff)).toBe(7)
+  })
+
+  it('never returns 0 for a deletion at the top of a file', () => {
+    // `@@ -1,3 +0,0 @@` is everything removed from line 1. There is no line 0 to open.
+    expect(firstHunkLine('@@ -1,3 +0,0 @@\n-a\n-b\n-c\n')).toBe(1)
+  })
+
+  it('is null when there is no diff at all, which is an untracked file', () => {
+    expect(firstHunkLine('')).toBeNull()
+    expect(firstHunkLine('Binary files a/x.png and b/x.png differ\n')).toBeNull()
+  })
+})
+
+describe('GitService.firstChangedLine', () => {
+  it('points at the line that changed, not at the top of the file', async () => {
+    const root = repo()
+    writeFileSync(join(root, 'file.txt'), Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') + '\n')
+    commitAll(root, 'first')
+    const lines = readFileSync(join(root, 'file.txt'), 'utf8').split('\n')
+    lines[11] = 'line 12 edited'
+    writeFileSync(join(root, 'file.txt'), lines.join('\n'))
+
+    expect(await service.firstChangedLine(root, 'file.txt', false)).toBe(12)
+    // Nothing is staged, so the index side has no hunk to report.
+    expect(await service.firstChangedLine(root, 'file.txt', true)).toBeNull()
+  })
+
+  it('reports null for an untracked file rather than guessing line 1', async () => {
+    const root = repo()
+    writeFileSync(join(root, 'seed.txt'), 'seed\n')
+    commitAll(root, 'first')
+    writeFileSync(join(root, 'fresh.txt'), 'new\n')
+    expect(await service.firstChangedLine(root, 'fresh.txt', false)).toBeNull()
+  })
+
+  it('reads the index side when asked, for a staged change', async () => {
+    const root = repo()
+    writeFileSync(join(root, 'file.txt'), 'a\nb\nc\nd\n')
+    commitAll(root, 'first')
+    writeFileSync(join(root, 'file.txt'), 'a\nb\nCHANGED\nd\n')
+    execFileSync('git', ['add', 'file.txt'], { cwd: root, stdio: 'pipe' })
+    expect(await service.firstChangedLine(root, 'file.txt', true)).toBe(3)
+  })
+
+  it('survives a path with a space in it', async () => {
+    const root = repo()
+    writeFileSync(join(root, 'a file.txt'), 'one\ntwo\n')
+    commitAll(root, 'first')
+    writeFileSync(join(root, 'a file.txt'), 'one\nTWO\n')
+    expect(await service.firstChangedLine(root, 'a file.txt', false)).toBe(2)
   })
 })

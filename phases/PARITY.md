@@ -100,13 +100,14 @@ user, plus the view enums in `scm_app.rs` and `explorer_app.rs`.
 |---|---|---|
 | A visible way into the dock | **done** | `▤ files` on the workspace strip's action row; `C-b e` was the only way in and nothing on screen said so |
 | Branch and ahead/behind under each workspace | **done** | `git.summary`, one `status -uno` per workspace, fetched when the workspace list changes — never polled |
-| Agents listed as task · tool, state · workspace | **done** | was tool + workspace *number*, which printed `claude` four times down a list of four agents |
+| Agents listed by workspace, then state · tool | **done** | phase 12: the **workspace** is the identity line, the tool is the dim one. Phase 11's `task · tool` used the pane title, and a pane title is not an identity |
 | `grouped` toggle on the agents list | **orphan** | herdr groups agents by workspace; we list them worst-state first |
 | Activity bar switching three views | **done** | `panel.ts`; word chips, clickable |
 | `1` / `2` / `3` switch view | **done** | a real switch that keeps each view's cursor and scroll |
 | Unified vs separate Explorer / Source Control | **done** | `[sidebar] layout`; `tab` moves between the halves |
 | Dock left or right | **done** | `[sidebar] dock`; the grip and `«` move to the inner edge |
-| Preferred width | **done** | `ui.sidebarWidth`, draggable |
+| Preferred width | **done** | `ui.sidebarWidth`, draggable; the default moved 22 → 30 in phase 12 |
+| Rounded pane borders | **done** | phase 12: `ui.pane-borders = "round"`, and the default. `true` still means the square set |
 | Icon theme (material / emoji / ascii) | **done** | `ascii` / `emoji` / `nerd`, width-checked per theme |
 | Colour theme | **done** | `resolveTheme`, plus `[theme]` overrides |
 | Settings persist across restarts | **done** | `[sidebar]` section; the write is now atomic and fsync'd |
@@ -129,6 +130,15 @@ section now has no `phase N` left in it, and **the port of herdr-sidebar's adver
 feature list is complete** apart from the named orphans and divergences below. One row
 was added rather than turned: copy-to-clipboard, which the drawers needed and which
 this project had never had at all.
+
+**Phase 12 turned no row above, and that was its whole point.** It is a design phase —
+a spacing unit, a type hierarchy, and a rule for what colour means — and none of that is
+a feature this table can score. Two rows' *notes* changed because their implementation
+did (the agents list and the default width), and one row was added for the rounded
+borders, which is a `ui` key and not a herdr-sidebar feature. **Nothing in this file
+measures what a surface looks like when it is all drawn at once**, which is exactly the
+hole PHASE-12 exists to fill and why it has a rendered-buffer test suite instead of a row
+here.
 
 **Phase 10 did not change a single row above, and that is the correct outcome.**
 It built a *host* for herdr's plugins — `plugin install`, a manifest reader, a
@@ -170,6 +180,12 @@ episode is not the drawers — it is that a deferral written in a "Do NOT do" li
 nowhere else survives exactly as long as nobody reads that phase document again.
 
 What remains unowned, and what each one probably needs:
+
+**A ninth row that this file cannot score, and that is the point.** Put our dock beside
+herdr's and it still reads as a different class of program, while every row above says
+done. Nothing here measures spacing, weight or what a colour means, so the gap was
+invisible to the scoreboard until somebody looked at the two side by side. It is now
+`PHASE-12.md`, which closes no row in this table on purpose.
 
 | Orphan | Where it likely belongs |
 |---|---|

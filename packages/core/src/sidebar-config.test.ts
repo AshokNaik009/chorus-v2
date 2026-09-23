@@ -32,7 +32,12 @@ describe('the defaults are what phases 7 and 8 already did', () => {
       followPane: true,
       rememberView: false,
       preview: false,
-      aiCommit: false
+      aiCommit: false,
+      // `auto` is the one default here that does something conditionally, and it is
+      // still the "changes nothing" answer: it means *the editor this terminal belongs
+      // to, if it belongs to one*, and in a plain terminal no editor is detected and
+      // the click selects exactly as it did before. See `client/src/editor.ts`.
+      openWith: 'auto'
     })
   })
 
@@ -59,7 +64,8 @@ describe('reading a [sidebar] block', () => {
         'follow-pane': false,
         'remember-view': true,
         preview: true,
-        'ai-commit': true
+        'ai-commit': true,
+        'open-with': 'cursor'
       }
     })
     expect(problems).toEqual([])
@@ -71,7 +77,8 @@ describe('reading a [sidebar] block', () => {
       followPane: false,
       rememberView: true,
       preview: true,
-      aiCommit: true
+      aiCommit: true,
+      openWith: 'cursor'
     })
   })
 
@@ -92,7 +99,8 @@ describe('reading a [sidebar] block', () => {
       'sidebar.follow-pane',
       'sidebar.remember-view',
       'sidebar.preview',
-      'sidebar.ai-commit'
+      'sidebar.ai-commit',
+      'sidebar.open-with'
     ]) {
       expect(keys).toContain(key)
     }

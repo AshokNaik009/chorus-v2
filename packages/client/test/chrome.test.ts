@@ -33,23 +33,34 @@ async function startShell(config?: string): Promise<TuiHarness> {
   return harness
 }
 
-/** The sidebar's column range, at the default width of 22. */
-const SIDEBAR_WIDTH = 22
+/**
+ * The sidebar's column range, at the default width.
+ *
+ * Phase 12 moved it from 22 to 30: the strip is a design and not a list of names, and
+ * 22 could not hold a workspace name, its branch and a two-line agent entry at once.
+ * At 120 columns the third-of-the-screen cap is 40, so 30 is what is drawn.
+ */
+const SIDEBAR_WIDTH = 30
 
 describe('the default layout', () => {
   it('draws a sidebar, a tab bar, a bordered pane and a status bar', async () => {
     const tui = await startShell()
     const lines = (await tui.screen()).split('\n')
 
-    // The sidebar owns the left columns from the top; the first workspace is its first
-    // row, with its active tab nested beneath.
-    expect(lines[0]?.slice(0, SIDEBAR_WIDTH)).toContain('1 workspace 1')
-    expect(lines[1]?.slice(0, SIDEBAR_WIDTH)).toContain('›')
+    // The sidebar owns the left columns from the top. Row 0 is the `spaces` card's
+    // header, row 1 the first workspace, row 2 its active tab nested beneath.
+    expect(lines[0]?.slice(0, SIDEBAR_WIDTH)).toContain('spaces')
+    // `▌ 1   workspace 1`: the bar is the selection, then the number in its own
+    // two-column gutter, then the column the status dot would be in, then the name.
+    // See `chrome.ts`'s grid.
+    expect(lines[1]?.slice(0, SIDEBAR_WIDTH)).toMatch(/^▌\s+1\s+workspace 1/u)
+    expect(lines[2]?.slice(0, SIDEBAR_WIDTH)).toContain('›')
     // Row 0 to the right of the sidebar is the tab bar, holding the one tab.
     expect(lines[0]?.slice(SIDEBAR_WIDTH)).toContain('1')
-    // The pane's top border starts one row down and one column right of the sidebar.
-    expect(lines[1]?.[SIDEBAR_WIDTH]).toBe('┌')
-    expect(lines[1]?.endsWith('┐')).toBe(true)
+    // The pane's top border starts one row down and one column right of the sidebar,
+    // and its corners are round — `[ui] pane-borders` defaults to "round".
+    expect(lines[1]?.[SIDEBAR_WIDTH]).toBe('╭')
+    expect(lines[1]?.endsWith('╮')).toBe(true)
     // The status bar owns the last row.
     expect(lines[31]).toContain('leap-chorus')
     expect(lines[31]).toContain('1 pane')
@@ -59,11 +70,13 @@ describe('the default layout', () => {
     const tui = await startShell()
     tui.command('w')
     const screen = await tui.waitForScreen(
-      (s) => s.includes('2 workspace 2'),
+      // Both halves, because they land in the same frame and waiting for only the
+      // sidebar can catch the frame before focus moved.
+      (s) => s.includes('workspace 2') && (s.split('\n')[31] ?? '').includes('[2]'),
       'the sidebar never listed a second workspace'
     )
     // Both are listed, and the status bar says which one we are in.
-    expect(screen).toContain('1 workspace 1')
+    expect(screen).toContain('workspace 1')
     expect(screen.split('\n')[31]).toContain('[2]')
   })
 
@@ -85,15 +98,15 @@ describe('the default layout', () => {
 
   it('toggling the sidebar gives its columns back to the panes', async () => {
     const tui = await startShell()
-    expect((await tui.screen()).split('\n')[1]?.[SIDEBAR_WIDTH]).toBe('┌')
+    expect((await tui.screen()).split('\n')[1]?.[SIDEBAR_WIDTH]).toBe('╭')
     tui.command('s')
     await waitUntil(
-      async () => (await tui.screen()).split('\n')[1]?.[0] === '┌',
+      async () => (await tui.screen()).split('\n')[1]?.[0] === '╭',
       () => 'the pane never reclaimed column 0 after the sidebar was hidden'
     )
     tui.command('s')
     await waitUntil(
-      async () => (await tui.screen()).split('\n')[1]?.[SIDEBAR_WIDTH] === '┌',
+      async () => (await tui.screen()).split('\n')[1]?.[SIDEBAR_WIDTH] === '╭',
       () => 'the sidebar never came back'
     )
   })
@@ -104,7 +117,7 @@ describe('the default layout', () => {
     await tui.waitForText('one-here')
 
     tui.command('w')
-    await tui.waitForText('2 workspace 2')
+    await tui.waitForText('workspace 2')
     // A fresh workspace shows its own pane, not the first one's output.
     await tui.waitForScreen((s) => !s.includes('one-here'), 'the new workspace still showed the old output')
 
@@ -115,8 +128,8 @@ describe('the default layout', () => {
   it('clicking a workspace row in the sidebar focuses it', async () => {
     const tui = await startShell()
     tui.command('w')
-    const screen = await tui.waitForText('2 workspace 2')
-    const row = screen.split('\n').findIndex((line) => line.includes('1 workspace 1'))
+    const screen = await tui.waitForText('workspace 2')
+    const row = screen.split('\n').findIndex((line) => /^.?\s+1\s+workspace 1/u.test(line))
     expect(row).toBeGreaterThanOrEqual(0)
 
     // SGR press then release at column 3 of that row; the wire is one-based.
@@ -172,7 +185,7 @@ prefix = "C-a"
   it('a config-added binding fires', async () => {
     const tui = await startShell(CONFIG)
     tui.write('\x01W')
-    await tui.waitForText('2 workspace 2')
+    await tui.waitForText('workspace 2')
   })
 })
 

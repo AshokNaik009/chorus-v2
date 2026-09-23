@@ -610,6 +610,28 @@ export class GitService {
   }
 
   /**
+   * The line number of a file's first change, for an editor to open on.
+   *
+   * `-U0`, so the hunk header names the first *changed* line rather than three lines of
+   * context above it. The number wanted is `c` in `@@ -a,b +c,d @@` — the new side,
+   * because that is the side the file on disk has.
+   *
+   * Null rather than 1 when there is no hunk: an untracked file has no diff at all, and
+   * a caller that is told "no line" opens the file plainly, while a caller told "line 1"
+   * cannot tell the difference between the top of the file and not knowing.
+   */
+  async firstChangedLine(cwd: string, path: string, staged: boolean): Promise<number | null> {
+    const root = await this.repoRoot(cwd)
+    const result = await this.git(
+      ['diff', ...(staged ? ['--staged'] : []), '-U0', '--no-color', '--', path],
+      root
+    )
+    // A failure is not worth reporting: the file still opens, just at the top.
+    if (result.code !== 0) return null
+    return firstHunkLine(result.stdout)
+  }
+
+  /**
    * The header line of several repositories at once, for the sidebar's workspace list.
    *
    * `--untracked-files=no` is the whole difference from `status`, and it is the reason
@@ -736,4 +758,26 @@ export class GitService {
       throw new RequestError(ErrorCodes.gitFailed, failureMessage(result, `git ${args[0]}`))
     }
   }
+}
+
+/**
+ * The new-side line of the first `@@` hunk header, or null.
+ *
+ * `@@ -40,0 +42,3 @@` is line 42. A pure deletion — `@@ -40,2 +39,0 @@` — names the
+ * line *before* the hole, which is where an editor should land anyway: there is
+ * nothing at 39 to point at, and the line above the removed text is what a reader is
+ * looking for. The count is ignored entirely; only the start matters.
+ */
+export function firstHunkLine(diff: string): number | null {
+  for (const line of diff.split('\n')) {
+    if (!line.startsWith('@@')) continue
+    const match = /^@@ -\d+(?:,\d+)? \+(\d+)/u.exec(line)
+    const start = match?.[1]
+    if (start === undefined) continue
+    const parsed = Number.parseInt(start, 10)
+    if (!Number.isFinite(parsed)) continue
+    // A hunk that starts at 0 is a pure deletion at the top of the file.
+    return Math.max(1, parsed)
+  }
+  return null
 }

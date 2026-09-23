@@ -77,7 +77,15 @@ export interface HarnessOptions {
  * lands — want the panes to own the whole screen. `chrome.test.ts` covers the default
  * layout, so turning the furniture off here narrows a test rather than avoiding one.
  */
-export const PLAIN_UI_CONFIG = '[ui]\nsidebar = false\ntab-bar = false\n'
+/**
+ * No sidebar, no tab bar, and square pane corners.
+ *
+ * The first two are so a test can assert on which column a border is in. The third is
+ * pinned for the same reason the benchmark pins `sidebar-width`: these tests are about
+ * pane *geometry*, and `[ui] pane-borders` is a look. The default is `round`, which
+ * `chrome.test.ts` is the one that exercises.
+ */
+export const PLAIN_UI_CONFIG = '[ui]\nsidebar = false\ntab-bar = false\npane-borders = "plain"\n'
 
 export class TuiHarness {
   /** Everything the client has written to its terminal, unparsed. */
@@ -249,7 +257,10 @@ export class TuiHarness {
   /** Wait for the app's first frame: a bordered pane and the status bar. */
   waitForReady(): Promise<string> {
     return this.waitForScreen(
-      (screen) => screen.includes('leap-chorus') && screen.includes('┌') && screen.includes('┘'),
+      // Corner-agnostic: `[ui] pane-borders` chooses between `╭╮╰╯` and `┌┐└┘`, and a
+      // harness that waits for one of them cannot start a client configured for the
+      // other. The vertical rule is in both sets and in neither status bar.
+      (screen) => screen.includes('leap-chorus') && screen.includes('│'),
       'the TUI never drew its first frame'
     )
   }

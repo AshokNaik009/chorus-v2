@@ -12,7 +12,10 @@
  */
 
 import {
+  ATTR_BOLD,
+  ATTR_DIM,
   ATTR_INVERSE,
+  COLOR_DEFAULT,
   DEFAULT_STYLE,
   ScreenBuffer,
   style,
@@ -21,7 +24,7 @@ import {
   type Style
 } from '@leap-chorus/tui'
 import { DEFAULT_CONFIG, resolveTheme, type Config } from '@leap-chorus/core'
-import type { GitRepoSummary, SessionStateSnapshot } from '@leap-chorus/protocol'
+import type { GitRepoSummary, SessionStateSnapshot, WorkspaceRecord } from '@leap-chorus/protocol'
 import {
   agentEntries,
   agentGlyph,
@@ -30,8 +33,10 @@ import {
   tabTitle,
   tabsOf,
   workspaceAgentStatus,
-  workspaceTitle
+  workspaceTitle,
+  type AgentEntry
 } from './model.js'
+import { workspaceHues } from './palette.js'
 
 /** Where a click lands. Filled while drawing, read when a click arrives. */
 export interface HitRegions {
@@ -154,9 +159,31 @@ export interface Palette {
   readonly sidebarActive: Style
   readonly tabActive: Style
   readonly tabIdle: Style
+  /**
+   * The inset surface a sidebar section is drawn on.
+   *
+   * A section is a **card**, and a card is a background tint. Without it the workspace
+   * list and the agents list are two headings in one undifferentiated column, and the
+   * blank space under the last entry reads as the screen having run out of content
+   * rather than as the end of the list.
+   */
+  readonly card: Style
   /** Keyed by agent status. An unknown status has no colour, only its glyph. */
   readonly agent: Readonly<Record<string, Style>>
 }
+
+/**
+ * The card tint when the theme has no surface of its own.
+ *
+ * A named theme carries one — `tab-idle-bg` is its `surface` role, one step off its
+ * base — so cards there are exactly the colour the theme author chose. The `terminal`
+ * theme has no colours at all: every field is `-1`, the terminal's own. There is no way
+ * to ask a terminal whether its background is light or dark, so this picks the dark
+ * answer, which is the same assumption `sidebar-fg = 7` and `idle-border = 8` have made
+ * since phase 4. Somebody on a light terminal sets `[theme] name` or `tab-idle-bg` and
+ * gets a card that matches.
+ */
+export const CARD_SURFACE = 235
 
 export function paletteOf(config: Config): Palette {
   // A named theme supplies the colours; explicit `[theme]` keys override it. Resolved
@@ -172,6 +199,10 @@ export function paletteOf(config: Config): Palette {
     sidebarActive: style({ fg: theme.sidebarActiveFg, bg: theme.sidebarActiveBg }),
     tabActive: style({ fg: theme.tabActiveFg, bg: theme.tabActiveBg }),
     tabIdle: style({ fg: theme.tabIdleFg, bg: theme.tabIdleBg }),
+    card: style({
+      fg: theme.sidebarFg,
+      bg: theme.tabIdleBg === COLOR_DEFAULT ? CARD_SURFACE : theme.tabIdleBg
+    }),
     agent: {
       idle: style({ fg: theme.agentIdle }),
       working: style({ fg: theme.agentWorking }),
@@ -186,29 +217,89 @@ export function paletteOf(config: Config): Palette {
  * Invert a style when the pointer is over it.
  *
  * Reverse video rather than a configured colour, and applied *on top of* whatever the
- * row already is, so it reads correctly against every theme and against both the
- * active and inactive row. One rule, two states, no new palette entry.
+ * row already is, so it reads correctly against every theme, against the card tint and
+ * against both the active and the inactive row. One rule, three states, no new palette
+ * entry.
  */
 function hovered(base: Style, isHovered: boolean): Style {
   return isHovered ? { ...base, attrs: base.attrs | ATTR_INVERSE } : base
 }
 
+/** The same style with a different foreground: keeps the row's background and attributes. */
+function tint(base: Style, fg: number): Style {
+  return { ...base, fg }
+}
+
+/** The same style, one attribute louder. Weight composes with hover and with the card. */
+function weight(base: Style, attrs: number): Style {
+  return { ...base, attrs: base.attrs | attrs }
+}
+
+/** The style already on a cell, so something drawn over a card keeps the card's tint. */
+function styleAt(buffer: ScreenBuffer, x: number, y: number): Style {
+  const cell = buffer.get(x, y)
+  return { fg: cell.fg, bg: cell.bg, attrs: cell.attrs }
+}
+
+// ---------------------------------------------------------------------------
+// The workspace strip
+// ---------------------------------------------------------------------------
+
 /**
- * Draw the workspace sidebar and return the rect left over.
+ * The grid every row of the strip is drawn on.
  *
- * Workspaces are listed in display order with their tabs nested beneath the active one
- * only — listing every tab of every workspace turns the sidebar into an outline nobody
- * asked for, and the tabs of a workspace you are not in are not actionable in one
- * click anyway.
+ * Five phases each added a row to this strip and none of them agreed on a column, which
+ * is most of why it read as a log rather than as a list. These are the columns, and
+ * nothing in the strip is drawn anywhere else:
+ *
+ * ```
+ *  ▌ 1 ● herdr                  2 x     0 mark · 1-2 index · 4 dot · 6 body
+ *        main ↑1 *                      6, dimmed: everything subordinate
+ *        › 1                            6, the active workspace's tabs
+ * ```
+ *
+ * `MARK_X` doubles as the card's left padding: blank except on the **active** workspace,
+ * whose whole entry carries a bar in its own hue. That bar is the selection. A
+ * full-width accent background would have fought the card tint it sits on, and hue is
+ * already identity, so putting the selection in that column costs nothing and says both
+ * things at once.
  */
-export function renderSidebar(
-  buffer: ScreenBuffer,
-  area: Rect,
-  state: SessionStateSnapshot,
-  palette: Palette,
-  hits: HitRegions,
-  /** Screen row the pointer is over, or -1. Only ever set when hover is enabled. */
-  hoverRow = -1,
+const MARK_X = 0
+const INDEX_X = 1
+const INDEX_WIDTH = 2
+const DOT_X = 4
+const BODY_X = 6
+/** One column kept clear down the right, mirroring `MARK_X`. The grip lives in it. */
+const RIGHT_PAD = 1
+
+/** The bar down the left of the active workspace's entry. */
+const ACTIVE_MARK = '▌'
+
+/**
+ * A working tree with tracked changes in it.
+ *
+ * `*` and not `●`: the filled circle means "an agent is working" two columns to the left
+ * on that row's neighbour, and two glyphs that differ only in meaning is how a
+ * vocabulary stops being one. `*` is what a shell prompt has marked a dirty tree with
+ * for twenty years.
+ */
+const DIRTY_MARK = '*'
+
+/** Nothing known about any workspace's git state. Shared, so the common case allocates nothing. */
+const NO_SUMMARIES: ReadonlyMap<string, GitRepoSummary> = new Map()
+
+export interface SidebarOptions {
+  /** Screen row the pointer is over, or -1. */
+  readonly hoverRow?: number
+  /**
+   * Whether hover is reported at all — `[general] mouse-hover`.
+   *
+   * It decides *where* the per-row chrome goes, not merely whether it lights up. With
+   * hover on, the pane count and the `x` belong to the row under the pointer. With it
+   * off there is no such row, ever, so they fall back to the **active** workspace —
+   * which keeps a visible close target on screen instead of silently deleting one.
+   */
+  readonly hoverEnabled?: boolean
   /**
    * The sidebar is docked on the right, so its *inner* edge is its first column.
    *
@@ -217,182 +308,379 @@ export function renderSidebar(
    * as long as `x` was always 0, and became a grip on the screen's outer edge the moment
    * `[sidebar] dock = "right"` existed.
    */
-  dockRight = false,
+  readonly dockRight?: boolean
   /**
    * One git headline per workspace id, when the client has fetched them.
    *
-   * Empty is a normal state, not a failure: the map is filled by `git.summary` after
-   * the first render, and a workspace outside a checkout is simply absent from it. A
-   * row with no entry draws no second line, so the list degrades to what it was.
+   * Empty is a normal state, not a failure: the map is filled by `git.summary` after the
+   * first render, and a workspace outside a checkout is simply absent from it. A row
+   * with no entry draws no branch line, so the list degrades to names.
    */
-  summaries: ReadonlyMap<string, GitRepoSummary> = new Map()
+  readonly summaries?: ReadonlyMap<string, GitRepoSummary>
+}
+
+/** Everything the row drawers need, gathered once so none of them takes nine arguments. */
+interface Strip {
+  readonly buffer: ScreenBuffer
+  readonly area: Rect
+  readonly palette: Palette
+  readonly hits: HitRegions
+  readonly hoverRow: number
+  /** First row past the bottom of the strip. */
+  readonly limit: number
+  readonly width: number
+  /** Workspace id -> its colour. See `palette.ts`. */
+  readonly hues: ReadonlyMap<string, number>
+}
+
+/** Paint one row edge to edge in `base`, so a card's tint covers its gaps too. */
+function paintRow(strip: Strip, y: number, base: Style): void {
+  strip.buffer.writeString(strip.area.x, y, ' '.repeat(strip.width), base, strip.area.x + strip.width)
+}
+
+/** Write inside the strip, clipped to it. `column` is relative to the strip's left edge. */
+function put(strip: Strip, column: number, y: number, text: string, base: Style): void {
+  strip.buffer.writeString(strip.area.x + column, y, text, base, strip.area.x + strip.width)
+}
+
+/** Columns a body line has, after the gutter on its left and the padding on its right. */
+function bodyRoom(strip: Strip, reserved = 0): number {
+  return Math.max(0, strip.width - BODY_X - RIGHT_PAD - reserved)
+}
+
+/**
+ * Draw the workspace sidebar.
+ *
+ * ## What this is, now that it is not a list
+ *
+ * Two **cards**, each on its own background tint with one column of padding a side,
+ * separated by a blank gutter row. `spaces` holds the workspaces, their branches, the
+ * active one's tabs and the action row; `agents` holds every agent in the session,
+ * worst state first. The untinted blank below the last card is what says *the list
+ * ended* rather than *the screen ran out of content*.
+ *
+ * ## The rhythm
+ *
+ * **The spacing unit is one row.** One blank row between entries, one above a section
+ * header, none below it. The header at the very top of the strip is the only row with
+ * no blank above it, because there is nothing above it to be separated from.
+ *
+ * ## What carries what
+ *
+ * - **Hue is identity**: a workspace's colour from `workspaceHues`, on its name, its
+ *   status dot, its selection bar, and on its agents' dots in the card below.
+ * - **Fill and weight are state**: the dot's shape is idle / working / blocked, and the
+ *   state *word* in the agents card is the colour of that state. Bold is a thing's own
+ *   name; dim is everything subordinate to it; nothing else is coloured at all.
+ * - **Chrome appears when it is relevant**: the pane count and the close `x` are drawn
+ *   on one row — the hovered one — rather than on every row all of the time. The
+ *   workspace *number* is not chrome and stays, dimmed, in its gutter: it is a key you
+ *   can press.
+ */
+export function renderSidebar(
+  buffer: ScreenBuffer,
+  area: Rect,
+  state: SessionStateSnapshot,
+  palette: Palette,
+  hits: HitRegions,
+  options: SidebarOptions = {}
 ): void {
+  if (area.width <= 0 || area.height <= 0) return
   buffer.fill(area, ' ', palette.sidebar)
-  let y = area.y
-  const limit = area.y + area.height
-  const width = area.width
 
-  // A section header, as in herdr-sidebar. One row, and it earns it: without it the
-  // workspace list and the agents list below run together into one list of names with
-  // a blank line in the middle.
-  if (y < limit) {
-    buffer.writeString(area.x, y, truncate('spaces', width).padEnd(width, ' '), palette.idleBorder, area.x + width)
-    y += 1
+  const hoverEnabled = options.hoverEnabled ?? true
+  const workspaces = orderedWorkspaces(state)
+  const strip: Strip = {
+    buffer,
+    area,
+    palette,
+    hits,
+    hoverRow: hoverEnabled ? (options.hoverRow ?? -1) : -1,
+    limit: area.y + area.height,
+    width: area.width,
+    hues: workspaceHues(workspaces.map((workspace) => workspace.workspaceId))
   }
+  const summaries = options.summaries ?? NO_SUMMARIES
 
-  for (const workspace of orderedWorkspaces(state)) {
-    if (y >= limit) return
-    const active = workspace.workspaceId === state.activeWorkspaceId
-    // Hover *composes* with selection rather than losing to it. Letting active win
-    // meant a session with one workspace — the common first-run case — had a single
-    // row that was always active and therefore never showed hover, so the pointer
-    // appeared to do nothing at all and the mouse looked broken.
-    const rowStyle = hovered(active ? palette.sidebarActive : palette.sidebar, y === hoverRow)
-    const paneCount = countPanes(state, workspace.workspaceId)
-
-    // The agent glyph **leads** the row, beside the number.
-    //
-    // It used to sit on the right, between the name and the pane count, where it read
-    // as part of the numbers rather than as a property of the workspace. Leading is
-    // where every list of this shape puts a status light, and it gives the eye one
-    // column to scan instead of a ragged right edge — which matters most in the state
-    // this exists for: four workspaces down the list, one of them blocked.
-    const status = workspaceAgentStatus(state, workspace.workspaceId)
-    const glyph = agentGlyph(status)
-    // `x` closes the workspace. Only drawn when there is more than one: closing the
-    // last workspace empties the session and quits, which is `C-b q`'s job and not
-    // something a stray click on a sidebar row should do.
-    const closable = state.workspaceOrder.length > 1
-    const suffix = ` ${paneCount}${closable ? ' x' : ''}`
-    const prefix = `${workspace.number} ${glyph === null ? ' ' : glyph} `
-
-    // The suffix is pinned right, so a long workspace name truncates rather than
-    // pushing the count off the edge.
-    const room = Math.max(0, width - suffix.length)
-    buffer.writeString(
-      area.x,
-      y,
-      truncate(`${prefix}${workspaceTitle(workspace)}`, room).padEnd(room, ' '),
-      rowStyle,
-      area.x + width
-    )
-    if (glyph !== null) {
-      // The glyph keeps the row's background but takes the state's foreground, so it
-      // reads on the active row too.
-      const agentStyle = palette.agent[status as string]
-      buffer.writeString(
-        area.x + `${workspace.number} `.length,
-        y,
-        glyph,
-        agentStyle === undefined ? rowStyle : { ...rowStyle, fg: agentStyle.fg },
-        area.x + width
-      )
-    }
-    buffer.writeString(area.x + room, y, ` ${paneCount}`, rowStyle, area.x + width)
-    if (closable) {
-      const closeX = area.x + room + ` ${paneCount}`.length
-      buffer.writeString(closeX, y, ' x', rowStyle, area.x + width)
-      hits.workspaceCloseSpans.push({ x: closeX, end: closeX + 2, y, workspaceId: workspace.workspaceId })
-    }
-    hits.workspaceRows.set(y, workspace.workspaceId)
-    y += 1
-
-    // The branch, dimmed, under the name — the one fact about a workspace you cannot
-    // get from its title, and the reason a workspace list beats a list of directories.
-    // Only when it is known: no row is invented for a directory that is not a checkout.
-    const summary = summaries.get(workspace.workspaceId)
-    if (summary !== undefined && summary.isRepo && summary.branch.length > 0 && y < limit) {
-      const counts = !summary.hasUpstream
-        ? ''
-        : `${summary.ahead > 0 ? ` ↑${summary.ahead}` : ''}${summary.behind > 0 ? ` ↓${summary.behind}` : ''}`
-      // Indented to the name's own column, so the two rows read as one entry.
-      const line = `    ${summary.branch}${counts}${summary.dirty ? ' ●' : ''}`
-      buffer.writeString(
-        area.x,
-        y,
-        truncate(line, width).padEnd(width, ' '),
-        hovered(palette.idleBorder, y === hoverRow),
-        area.x + width
-      )
-      // The same click target as the name above it: two rows, one workspace.
-      hits.workspaceRows.set(y, workspace.workspaceId)
-      y += 1
-    }
-
-    if (!active) continue
-    for (const tab of tabsOf(state, workspace.workspaceId)) {
-      if (y >= limit) return
-      const selected = tab.tabId === workspace.activeTabId
-      const text = `  ${selected ? '›' : ' '} ${tabTitle(tab)}`
-      buffer.writeString(
-        area.x,
-        y,
-        truncate(text, width).padEnd(width, ' '),
-        hovered(selected ? palette.tabActive : palette.sidebar, y === hoverRow),
-        area.x + width
-      )
-      hits.sidebarTabRows.set(y, tab.tabId)
-      y += 1
-    }
+  let y = sectionHeader(strip, area.y, 'spaces')
+  let first = true
+  for (const workspace of workspaces) {
+    if (y >= strip.limit) break
+    if (!first) y = blankRow(strip, y, palette.card)
+    first = false
+    y = workspaceEntry(strip, state, workspace, y, summaries, hoverEnabled)
   }
+  // The action row is an entry in the rhythm like any other, so it takes a blank above
+  // it — including when the list above it is empty and that blank is the card's floor.
+  y = blankRow(strip, y, palette.card)
+  y = actionRow(strip, y)
+  y = agentsCard(strip, state, y)
 
-  // One action row, `new` left and `menu` right, following herdr. Two separate rows
-  // cost two lines of a 22-column strip to say what fits on one, and the pair reads
-  // as a toolbar rather than as two more list entries you might have missed.
-  //
-  // Between them sits `▤ files`, which opens the docked file sidebar. It is there
-  // because the dock had no visible way in at all: `C-b e` opens it and nothing on
-  // screen says so, which makes a whole half of the program invisible to anyone who
-  // has not read the keys. The glyph degrades to `▤` alone before it is dropped, so a
-  // narrow strip loses the word rather than the button.
-  if (y < limit) {
-    const row = hovered(palette.sidebar, y === hoverRow)
-    buffer.writeString(area.x, y, ' '.repeat(width), row, area.x + width)
-    buffer.writeString(area.x, y, truncate(' new', width), row, area.x + width)
-    const menu = 'menu '
-    const menuStart = area.x + Math.max(0, width - menu.length)
-    buffer.writeString(menuStart, y, menu, row, area.x + width)
-
-    // Centred in what is left between `new` and `menu`, and only if it fits whole:
-    // a half-drawn label would be a target whose edge nobody can find.
-    const gap = { start: area.x + 5, end: menuStart - 1 }
-    const label = gap.end - gap.start >= FILES_LABEL.length ? FILES_LABEL : FILES_GLYPH
-    let files: { x: number; end: number } | null = null
-    if (gap.end - gap.start >= label.length) {
-      const x = gap.start + Math.floor((gap.end - gap.start - label.length) / 2)
-      buffer.writeString(x, y, label, row, area.x + width)
-      files = { x, end: x + label.length }
-    }
-    hits.actionRow = { row: y, newEnd: area.x + 4, menuStart, files }
-    // Kept so a click anywhere else on the row still makes a workspace, which is the
-    // more likely intent on a row whose left half says `new`.
-    hits.newWorkspaceRow = y
-    y += 1
-  }
-
-  renderAgentSection(buffer, area, state, palette, hits, hoverRow, y)
-
-  // The `«` sits at the bottom right, where herdr puts it: out of the way of the
-  // list, and on the edge it collapses towards.
+  // The `«` sits at the bottom, on the edge it collapses towards, where herdr puts it:
+  // out of the way of the list. It and the grip both read the style already on the cell,
+  // so neither punches a hole in a card that happens to reach the bottom of the strip.
   const collapseY = area.y + area.height - 1
-  const collapseX = dockRight ? area.x : area.x + width - 2
+  const collapseX = options.dockRight === true ? area.x : area.x + area.width - 2
   if (collapseY > area.y) {
-    // The arrow points at the edge it collapses towards, which is the opposite one on
-    // each side.
-    const arrow = dockRight ? '» ' : ' «'
-    buffer.writeString(collapseX, collapseY, arrow, hovered(palette.sidebar, collapseY === hoverRow), area.x + width)
+    const arrow = options.dockRight === true ? '» ' : ' «'
+    const base = weight(styleAt(buffer, collapseX, collapseY), ATTR_DIM)
+    buffer.writeString(collapseX, collapseY, arrow, hovered(base, collapseY === strip.hoverRow), area.x + area.width)
     hits.collapse = { x: collapseX, end: collapseX + 2, y: collapseY }
   }
   // The grip: three cells at the vertical middle of the sidebar's inner column. Short
   // enough to be a target rather than an edge, long enough to find.
-  const gripX = dockRight ? area.x : area.x + width - 1
+  //
+  // Docked left it lands in `RIGHT_PAD`, which is kept clear for exactly this. Docked
+  // right the inner edge is `MARK_X`, so for three rows the grip replaces the active
+  // workspace's selection bar — the drag target wins, because the bar is repeated on
+  // every row of its entry and the grip exists only there.
+  const gripX = options.dockRight === true ? area.x : area.x + area.width - 1
   const gripTop = area.y + Math.floor(area.height / 2) - 1
   for (let i = 0; i < 3; i++) {
     const gy = gripTop + i
     if (gy < area.y || gy >= area.y + area.height) continue
-    buffer.writeString(gripX, gy, GRIP_VERTICAL, palette.idleBorder, gripX + 1)
+    buffer.writeString(gripX, gy, GRIP_VERTICAL, tint(styleAt(buffer, gripX, gy), palette.idleBorder.fg), gripX + 1)
     hits.grips.push({ x: gripX, y: gy, kind: 'sidebar' })
   }
+}
+
+/**
+ * A card's section header: dim, on the card's tint, with no blank row under it.
+ *
+ * The blank row *above* is the caller's, because between two cards it is the gutter and
+ * belongs to neither.
+ */
+function sectionHeader(strip: Strip, y: number, label: string): number {
+  if (y >= strip.limit) return y
+  const base = hovered(strip.palette.card, y === strip.hoverRow)
+  paintRow(strip, y, base)
+  put(strip, INDEX_X, y, truncate(label, Math.max(0, strip.width - INDEX_X - RIGHT_PAD)), weight(base, ATTR_DIM))
+  return y + 1
+}
+
+/** One row of the rhythm. Tinted, so a blank inside a card is still card. */
+function blankRow(strip: Strip, y: number, base: Style): number {
+  if (y >= strip.limit) return y
+  paintRow(strip, y, hovered(base, y === strip.hoverRow))
+  return y + 1
+}
+
+/**
+ * One workspace: its name, its branch, and — when it is the active one — its tabs.
+ *
+ * Every row of the entry resolves to a click on that workspace, and every row of the
+ * active entry carries the selection bar, so a four-row entry still reads as one thing
+ * rather than as four neighbours.
+ */
+function workspaceEntry(
+  strip: Strip,
+  state: SessionStateSnapshot,
+  workspace: WorkspaceRecord,
+  startY: number,
+  summaries: ReadonlyMap<string, GitRepoSummary>,
+  hoverEnabled: boolean
+): number {
+  const { palette, hits } = strip
+  let y = startY
+  if (y >= strip.limit) return y
+
+  const active = workspace.workspaceId === state.activeWorkspaceId
+  const hue = strip.hues.get(workspace.workspaceId) ?? palette.sidebar.fg
+  const markRow = (row: number, base: Style): void => {
+    if (active) put(strip, MARK_X, row, ACTIVE_MARK, tint(base, hue))
+  }
+
+  // Hover *composes* with selection rather than losing to it. Letting active win meant
+  // a session with one workspace — the common first-run case — had a single row that
+  // was always active and therefore never showed hover, so the pointer appeared to do
+  // nothing at all and the mouse looked broken.
+  const base = hovered(palette.card, y === strip.hoverRow)
+  paintRow(strip, y, base)
+  markRow(y, base)
+  put(strip, INDEX_X, y, truncate(String(workspace.number), INDEX_WIDTH).padStart(INDEX_WIDTH, ' '), weight(base, ATTR_DIM))
+
+  // The dot leads the name, in the workspace's own hue. Its *shape* is the state; the
+  // colour is whose state it is. A blocked workspace is also the top row of the agents
+  // card below, where the word `blocked` is red — so the colour that means urgency is
+  // spent once, in the place that exists to answer "what needs me".
+  const dot = agentGlyph(workspaceAgentStatus(state, workspace.workspaceId))
+  if (dot !== null) put(strip, DOT_X, y, dot, tint(base, hue))
+
+  // The pane count and the `x` are the chrome nobody looks at and everybody pays for:
+  // occasionally useful and permanently present is the worst trade in a narrow strip.
+  // They appear on one row, and the name's room shrinks by exactly what they take.
+  const chromeHere = hoverEnabled ? y === strip.hoverRow : active
+  let reserved = 0
+  if (chromeHere) {
+    // Closing the last workspace empties the session and quits, which is `C-b q`'s job
+    // and not something a stray click on a sidebar row should do.
+    const closable = state.workspaceOrder.length > 1
+    const chrome = `${countPanes(state, workspace.workspaceId)}${closable ? ' x' : ''}`
+    // One column of gap before it, and `RIGHT_PAD` after it, like every other row.
+    reserved = chrome.length + 1
+    put(strip, strip.width - RIGHT_PAD - chrome.length, y, chrome, weight(base, ATTR_DIM))
+    if (closable) {
+      const closeX = strip.area.x + strip.width - RIGHT_PAD - 2
+      hits.workspaceCloseSpans.push({ x: closeX, end: closeX + 2, y, workspaceId: workspace.workspaceId })
+    }
+  }
+  put(
+    strip,
+    BODY_X,
+    y,
+    truncate(workspaceTitle(workspace), bodyRoom(strip, reserved)),
+    weight(tint(base, hue), ATTR_BOLD)
+  )
+  hits.workspaceRows.set(y, workspace.workspaceId)
+  y += 1
+
+  // The branch, dimmed, under the name — the one fact about a workspace you cannot get
+  // from its title, and the reason a workspace list beats a list of directories. Only
+  // when it is known: no row is invented for a directory that is not a checkout.
+  const summary = summaries.get(workspace.workspaceId)
+  if (summary !== undefined && summary.isRepo && summary.branch.length > 0 && y < strip.limit) {
+    const counts = !summary.hasUpstream
+      ? ''
+      : `${summary.ahead > 0 ? ` ↑${summary.ahead}` : ''}${summary.behind > 0 ? ` ↓${summary.behind}` : ''}`
+    const line = `${summary.branch}${counts}${summary.dirty ? ` ${DIRTY_MARK}` : ''}`
+    const row = hovered(palette.card, y === strip.hoverRow)
+    paintRow(strip, y, row)
+    markRow(y, row)
+    put(strip, BODY_X, y, truncate(line, bodyRoom(strip)), weight(row, ATTR_DIM))
+    // The same click target as the name above it: two rows, one workspace.
+    hits.workspaceRows.set(y, workspace.workspaceId)
+    y += 1
+  }
+
+  // Tabs are nested under the active workspace only. Listing every tab of every
+  // workspace turns the strip into an outline nobody asked for, and the tabs of a
+  // workspace you are not in are not reachable in one click anyway.
+  if (!active) return y
+  for (const tab of tabsOf(state, workspace.workspaceId)) {
+    if (y >= strip.limit) return y
+    const selected = tab.tabId === workspace.activeTabId
+    const row = hovered(palette.card, y === strip.hoverRow)
+    paintRow(strip, y, row)
+    markRow(y, row)
+    put(strip, BODY_X, y, selected ? '›' : ' ', weight(row, ATTR_DIM))
+    // Weight, not colour: the tab bar across the top already says which tab is showing
+    // in the accent, and a second accent down here would be two answers to one question.
+    put(strip, BODY_X + 2, y, truncate(tabTitle(tab), bodyRoom(strip, 2)), weight(row, selected ? ATTR_BOLD : ATTR_DIM))
+    hits.sidebarTabRows.set(y, tab.tabId)
+    y += 1
+  }
+  return y
+}
+
+/**
+ * The `spaces` card's last row: `new` on the left, `menu` on the right, `▤ files` between.
+ *
+ * Three targets on one row, following herdr. Two separate rows would cost two lines of a
+ * thirty-column strip to say what fits on one, and the trio reads as a toolbar rather
+ * than as two more list entries you might have missed.
+ *
+ * `▤ files` opens the docked file sidebar. It is there because the dock had no visible
+ * way in at all: `C-b e` opens it and nothing on screen said so, which makes a whole
+ * half of the program invisible to anyone who has not read the keys. The label degrades
+ * to `▤` alone before it is dropped, so a narrow strip loses the word and not the button.
+ */
+function actionRow(strip: Strip, y: number): number {
+  if (y >= strip.limit) return y
+  const { hits } = strip
+  const base = hovered(strip.palette.card, y === strip.hoverRow)
+  paintRow(strip, y, base)
+  const dim = weight(base, ATTR_DIM)
+
+  const add = ' + new'
+  put(strip, MARK_X, y, truncate(add, strip.width), dim)
+  const menu = 'menu'
+  const menuColumn = Math.max(0, strip.width - RIGHT_PAD - menu.length)
+  put(strip, menuColumn, y, menu, dim)
+
+  // Centred in what is left between the two, and only if it fits whole: a half-drawn
+  // label is a target whose edge nobody can find.
+  const gapStart = Math.min(strip.width, add.length + 1)
+  const gapEnd = menuColumn - 1
+  const label = gapEnd - gapStart >= FILES_LABEL.length ? FILES_LABEL : FILES_GLYPH
+  let files: { x: number; end: number } | null = null
+  if (gapEnd - gapStart >= label.length) {
+    const column = gapStart + Math.floor((gapEnd - gapStart - label.length) / 2)
+    put(strip, column, y, label, dim)
+    files = { x: strip.area.x + column, end: strip.area.x + column + label.length }
+  }
+  hits.actionRow = { row: y, newEnd: strip.area.x + add.length, menuStart: strip.area.x + menuColumn, files }
+  // Kept so a click anywhere else on the row still makes a workspace, which is the more
+  // likely intent on a row whose left half says `new`.
+  hits.newWorkspaceRow = y
+  return y + 1
+}
+
+/**
+ * The `agents` card: every agent in the session, wherever it is.
+ *
+ * Separate from the workspace list because it answers a different question. The
+ * workspace rows say "is anything in there waiting on me"; this says *which* agent, in
+ * one click's reach, including the ones three workspaces away that you cannot see.
+ * Worst state first, so a blocked agent is at the top of the list rather than wherever
+ * it happens to live.
+ */
+function agentsCard(strip: Strip, state: SessionStateSnapshot, startY: number): number {
+  const entries = agentEntries(state)
+  if (entries.length === 0) return startY
+  // The gutter between the two cards, in the sidebar's own background rather than in
+  // either card's tint — which is what makes them read as two panels and not as one
+  // list with a gap in it. It is also the blank row a section header takes above it.
+  let y = blankRow(strip, startY, strip.palette.sidebar)
+  y = sectionHeader(strip, y, 'agents')
+  let first = true
+  for (const entry of entries) {
+    if (y >= strip.limit) break
+    if (!first) y = blankRow(strip, y, strip.palette.card)
+    first = false
+    y = agentEntry(strip, state, entry, y)
+  }
+  return y
+}
+
+/**
+ * One agent: the workspace it belongs to, then how it is going and what is running it.
+ *
+ * **The workspace is the identity, not the pane title.** The old row put the window
+ * title Claude Code sets on the first line, so four Claude panes drew four identical
+ * rows and the thing that distinguished them — which project they were in — was a
+ * right-aligned number. Here the first line is the project, in the project's hue, and
+ * the tool is on the dim line where it belongs.
+ *
+ * The pane's own title is not drawn at all. There is no column for a third fact at
+ * thirty columns, and it was never an identity: two agents in one workspace are two
+ * adjacent rows that differ only in order, and each still clicks through to its own pane.
+ */
+function agentEntry(strip: Strip, state: SessionStateSnapshot, entry: AgentEntry, startY: number): number {
+  const { palette, hits } = strip
+  let y = startY
+  const hue = strip.hues.get(entry.workspaceId) ?? palette.sidebar.fg
+
+  const base = hovered(palette.card, y === strip.hoverRow)
+  paintRow(strip, y, base)
+  put(strip, DOT_X, y, agentGlyph(entry.status) ?? '?', tint(base, hue))
+  const place = workspaceNameOf(state, entry.workspaceId, entry.workspaceNumber)
+  put(strip, BODY_X, y, truncate(place, bodyRoom(strip)), weight(tint(base, hue), ATTR_BOLD))
+  hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
+  y += 1
+  if (y >= strip.limit) return y
+
+  // `working · claude`: the state in the state's own colour — the one thing colour is
+  // still allowed to mean besides identity — then, dimmed, what is running.
+  const second = hovered(palette.card, y === strip.hoverRow)
+  paintRow(strip, y, second)
+  const dim = weight(second, ATTR_DIM)
+  const agentStyle = palette.agent[entry.status]
+  const room = bodyRoom(strip)
+  const word = truncate(entry.status, room)
+  put(strip, BODY_X, y, word, agentStyle === undefined ? dim : tint(second, agentStyle.fg))
+  put(strip, BODY_X + word.length, y, truncate(` · ${entry.agent}`, Math.max(0, room - word.length)), dim)
+  hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
+  return y + 1
 }
 
 /**
@@ -436,87 +724,10 @@ export function renderDividerGrips(
   }
 }
 
-/** A workspace's display name, for the agents list's second line. */
+/** A workspace's display name, for the agents card's first line. */
 function workspaceNameOf(state: SessionStateSnapshot, workspaceId: string, number: number): string {
   const workspace = state.workspaces.find((entry) => entry.workspaceId === workspaceId)
   return workspace === undefined ? `workspace ${number}` : workspaceTitle(workspace)
-}
-
-/**
- * The agents section: every agent in the session, wherever it is.
- *
- * Separate from the workspace list because it answers a different question. The
- * workspace rows say "is anything in there waiting on me"; this says *which* agent,
- * in one click's reach, including the ones three workspaces away that you cannot see.
- * Worst state first, so a blocked agent is at the top of the list rather than wherever
- * it happens to live.
- *
- * Two lines each, following herdr: the agent and its state, then a dimmed second line
- * with the pane's own title. The title is what distinguishes four panes all running
- * `claude`, which is the normal case this is for.
- */
-function renderAgentSection(
-  buffer: ScreenBuffer,
-  area: Rect,
-  state: SessionStateSnapshot,
-  palette: Palette,
-  hits: HitRegions,
-  hoverRow: number,
-  startY: number
-): void {
-  const entries = agentEntries(state)
-  if (entries.length === 0) return
-  const limit = area.y + area.height
-  const width = area.width
-  let y = startY + 1
-  if (y >= limit) return
-
-  buffer.writeString(area.x, y, truncate('agents', width).padEnd(width, ' '), palette.sidebar, area.x + width)
-  y += 1
-
-  for (const entry of entries) {
-    if (y >= limit) return
-    const glyph = agentGlyph(entry.status) ?? '?'
-    const rowStyle = hovered(palette.sidebar, y === hoverRow)
-
-    // Line one is **what is running**, line two is **how it is going and where**.
-    // It used to be the tool on one line and the pane title on the other, which put
-    // the word `claude` four times down a list of four agents and made the one thing
-    // that distinguishes them — their task — the dim half. A pane whose title is still
-    // the tool's own name falls back to the tool, so nothing renders as `claude ·
-    // claude`.
-    const task = entry.title.trim()
-    const named = task.length > 0 && task.toLowerCase() !== entry.agent.toLowerCase()
-    const label = ` ${glyph} ${named ? task : entry.agent}`
-    const tool = named ? ` ${entry.agent}` : ''
-    const room = Math.max(0, width - tool.length)
-    buffer.writeString(area.x, y, truncate(label, room).padEnd(room, ' '), rowStyle, area.x + width)
-    if (tool.length > 0) {
-      buffer.writeString(area.x + room, y, tool, hovered(palette.idleBorder, y === hoverRow), area.x + width)
-    }
-
-    // The glyph carries the state's colour; the rest of the row does not, so a list of
-    // eight agents reads as one list with one thing standing out.
-    const agentStyle = palette.agent[entry.status]
-    if (agentStyle !== undefined) {
-      buffer.writeString(area.x + 1, y, glyph, { ...rowStyle, fg: agentStyle.fg }, area.x + width)
-    }
-    hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
-    y += 1
-
-    if (y >= limit) return
-    // `idle · acme-app`: the state in its own colour, then the workspace it is in.
-    // The workspace by *name*, not by number — a number is a keystroke, and this line
-    // is answering "which project is that".
-    const place = workspaceNameOf(state, entry.workspaceId, entry.workspaceNumber)
-    const dim = hovered(palette.idleBorder, y === hoverRow)
-    buffer.writeString(area.x, y, ' '.repeat(width), dim, area.x + width)
-    buffer.writeString(area.x, y, truncate(`   ${entry.status}`, width), agentStyle ?? dim, area.x + width)
-    const after = area.x + Math.min(width, 3 + entry.status.length)
-    buffer.writeString(after, y, truncate(` · ${place}`, Math.max(0, area.x + width - after)), dim, area.x + width)
-    hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
-    y += 1
-  }
 }
 
 /**
@@ -688,6 +899,11 @@ export function renderSidebarRail(
 
     buffer.writeString(area.x, y, truncate(`${workspace.number}`, 2).padEnd(2, ' '), rowStyle, area.x + area.width)
     if (glyph !== null) {
+      // **The one place status keeps a hue.** Three columns hold a number and a dot:
+      // there is no name to colour, so identity has nowhere to go, and no state word,
+      // so state has nothing else to ride on. The rail is what you look at when you
+      // have given the strip's columns back and still want to know if something is
+      // waiting — which is a question about state.
       const agentStyle = palette.agent[status as string]
       buffer.writeString(area.x + 2, y, glyph, agentStyle === undefined ? rowStyle : { ...rowStyle, fg: agentStyle.fg }, area.x + area.width)
     }

@@ -78,6 +78,8 @@ import type {
   GitDrawerActionResult,
   GitDrawerParams,
   GitDrawerResult,
+  GitFirstChangeParams,
+  GitFirstChangeResult,
   GitPathsParams,
   GitStatusParams,
   GitStatusResult,
@@ -452,6 +454,8 @@ export interface AgentMethodMap {
   /** One drawer's rows, fetched when it is opened. See PHASE-11. */
   /** One header line per directory, for the workspace list. */
   'git.summary': { params: GitSummaryParams; result: GitSummaryResult }
+  /** The line an editor should open a changed file on. */
+  'git.firstChange': { params: GitFirstChangeParams; result: GitFirstChangeResult }
   'git.drawer': { params: GitDrawerParams; result: GitDrawerResult }
   'git.drawerAction': { params: GitDrawerActionParams; result: GitDrawerActionResult }
 
@@ -490,6 +494,7 @@ export const AGENT_METHODS = [
   'git.sync',
   'git.suggest',
   'git.summary',
+  'git.firstChange',
   'git.drawer',
   'git.drawerAction',
   'worktree.list',

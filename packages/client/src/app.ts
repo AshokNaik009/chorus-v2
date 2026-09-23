@@ -29,6 +29,7 @@
  * only place SIGWINCH has to propagate to.
  */
 
+import { spawn } from 'node:child_process'
 import type { DaemonClient } from '@leap-chorus/daemon'
 import type {
   EventMessage,
@@ -43,6 +44,7 @@ import {
   BORDER_ALL,
   DEFAULT_STYLE,
   PLAIN_BORDER,
+  ROUND_BORDER,
   ScreenBuffer,
   contains,
   diffBuffers,
@@ -51,6 +53,7 @@ import {
   renderBlock,
   renderParagraph,
   span,
+  type BorderChars,
   type DiffSpan,
   type Rect,
   type Style
@@ -104,6 +107,7 @@ import {
 import { playSound, type SoundKind } from './sound.js'
 import type { ScmOutcome } from './scm.js'
 import { drawerCommand, drawerMenu } from './drawers.js'
+import { editorArgs, explainNoEditor, resolveExternalEditor, type ExternalEditor } from './editor.js'
 import { copyToClipboard } from './clipboard.js'
 import type { ExplorerOutcome } from './explorer.js'
 import { SidebarPanels, panelSettings, type PanelOutcome, type ViewId } from './panel.js'
@@ -118,6 +122,7 @@ import type {
   GitDrawerId,
   GitDrawerResult,
   GitDrawerRow,
+  GitFirstChangeResult,
   GitRepoSummary,
   GitStatusResult,
   GitSummaryResult,
@@ -628,6 +633,23 @@ export class TuiApp {
    */
   private dockRight(): boolean {
     return this.config.sidebar.dock === 'right'
+  }
+
+  /** Whether panes are drawn inside a box at all. `off` gives the columns back. */
+  private paneBorders(): boolean {
+    return this.config.ui.paneBorders !== 'off'
+  }
+
+  /**
+   * The box-drawing set every framed thing in the client uses.
+   *
+   * One answer for panes and dialogs alike, because a program with rounded panes and
+   * square dialogs is the same defect phase 12 set out to fix — eight decisions by
+   * eight authors in one window. `off` still answers `ROUND_BORDER`: nothing draws a
+   * pane border then, but the dialogs still have to be drawn with something.
+   */
+  private borderChars(): BorderChars {
+    return this.config.ui.paneBorders === 'plain' ? PLAIN_BORDER : ROUND_BORDER
   }
 
   private sidebarArea(): Rect | null {
@@ -1899,10 +1921,17 @@ export class TuiApp {
     const width = area === null ? MIN_SIDEBAR_WIDTH : panels.previewWidth(area)
     this.requestRender()
     try {
+      // **The root travels with the path.** Every path that reaches here is a row of
+      // the explorer tree, and a tree row is relative to the root that listing came
+      // back with. Leaving the daemon to re-derive a root meant it derived a *different*
+      // one whenever the focused pane had `cd`-ed or focus had moved to a pane in
+      // another repository — and then the click either failed with "path escapes the
+      // root" or, worse, previewed a file of the same name somewhere else entirely.
       const result = (await this.options.client.call('preview.read', {
         paneId,
         path,
-        width
+        width,
+        ...(panels.explorer.root === '' ? {} : { root: panels.explorer.root })
       } as never)) as PreviewResult
       if (this.panels === panels) panels.preview.adopt(result)
     } catch (error) {
@@ -1996,6 +2025,9 @@ export class TuiApp {
         return
       case 'drawerMenu':
         this.openDrawerMenu(outcome.drawer, outcome.row)
+        return
+      case 'open':
+        await this.openInExternalEditor(outcome.path, outcome.staged)
         return
       case 'commit': {
         if (paneId === null) return
@@ -2492,6 +2524,83 @@ export class TuiApp {
     if (panels === null || !panels.scm.drawers.isExpanded(id)) return
     panels.scm.drawers.reload(id)
     await this.fetchDrawer(id)
+  }
+
+  /**
+   * The editor this terminal belongs to, resolved now.
+   *
+   * Never cached. `editor.ts` explains at length why a long-lived detached daemon
+   * makes a remembered answer the wrong answer; the short version is that the terminal
+   * a client is attached to is not the one that started the session.
+   */
+  private externalEditor(): ExternalEditor | null {
+    return resolveExternalEditor(process.env, { configured: this.config.sidebar.openWith })
+  }
+
+  /**
+   * Open a changed file where the user is already looking.
+   *
+   * In a VS Code (or Cursor, or Windsurf) integrated terminal this hands the file to
+   * that window, at its first changed line. In a plain terminal there is nothing to
+   * hand it to, and the gesture is left meaning exactly what it meant before — a click
+   * selected the row, and `o` still opens the diff in a pager pane.
+   *
+   * The child is **detached with no stdio**. Both halves matter: inheriting our
+   * terminal would let it paint over a full-screen TUI, and staying attached would tie
+   * an editor that outlives the session to a process that does not.
+   */
+  private async openInExternalEditor(path: string, staged: boolean): Promise<void> {
+    const panels = this.panels
+    if (panels === null) return
+    const editor = this.externalEditor()
+    if (editor === null) {
+      // **Not silent.** A click that does nothing and says nothing is a click the user
+      // has to come and ask about, which is exactly what happened. `explainNoEditor`
+      // tells the three causes apart — a plain terminal, an editor whose CLI is not
+      // installed, and a typo in the config — and names the one line that fixes each.
+      // Only `open-with = "off"` stays quiet, because that no-op was asked for.
+      const why = explainNoEditor(process.env, { configured: this.config.sidebar.openWith })
+      if (why !== null) panels.scm.report(why)
+      this.requestRender()
+      return
+    }
+    const root = panels.scm.status?.root ?? null
+    if (root === null) return
+    const paneId = this.scmPaneId()
+    let line: number | null = null
+    if (paneId !== null) {
+      try {
+        const result = (await this.options.client.call('git.firstChange', {
+          paneId,
+          path,
+          staged
+        } as never)) as GitFirstChangeResult
+        line = result.line
+      } catch {
+        // The line is a nicety; losing it must not lose the file.
+        line = null
+      }
+    }
+    const file = `${root}/${path}`
+    try {
+      const child = spawn(editor.cli, [...editorArgs(file, line)], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: root
+      })
+      // A missing binary surfaces asynchronously, so it is caught here rather than by
+      // the try. `resolveExternalEditor` already checked `PATH`, which makes this the
+      // race where it was removed in between.
+      child.on('error', (error) => {
+        this.panels?.scm.fail(`could not start ${editor.cli}: ${messageOf(error)}`)
+        this.requestRender()
+      })
+      child.unref()
+      panels.scm.report(`opened in ${editor.name}${line === null ? '' : ` at line ${line}`}`)
+    } catch (error) {
+      panels.scm.fail(`could not start ${editor.cli}: ${messageOf(error)}`)
+    }
+    this.requestRender()
   }
 
   /** `git <args>` in a pane, which is where every diff in this project is read. */
@@ -3064,13 +3173,13 @@ export class TuiApp {
         const view = this.views.get(entry.paneId)
         const record = paneById(this.state, entry.paneId)
         if (!view || !record) continue
-        const inner = this.config.ui.paneBorders
+        const inner = this.paneBorders()
           ? renderBlock(this.back, entry.rect, {
               borders: BORDER_ALL,
               // Focus is signalled by color alone, not by a different glyph set: a
               // style-only change diffs to the same cells with new SGR, where swapping
               // box-drawing characters would repaint every border cell on every move.
-              chars: PLAIN_BORDER,
+              chars: this.borderChars(),
               borderStyle: entry.focused ? this.palette.focusBorder : this.palette.idleBorder,
               title: paneTitle(record),
               titleStyle: this.palette.paneTitle,
@@ -3080,7 +3189,7 @@ export class TuiApp {
               ...this.paneRightTitle(record, zoomed && entry.focused)
             })
           : entry.rect
-        if (this.config.ui.paneBorders) {
+        if (this.paneBorders()) {
           renderPaneButtons(
             this.back,
             entry.rect,
@@ -3109,16 +3218,12 @@ export class TuiApp {
         } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
         } else {
-          renderSidebar(
-            this.back,
-            sidebar,
-            this.state,
-            this.palette,
-            this.hits,
-            this.sidebarHoverRow(),
-            this.dockRight(),
-            this.repoSummaries
-          )
+          renderSidebar(this.back, sidebar, this.state, this.palette, this.hits, {
+            hoverRow: this.sidebarHoverRow(),
+            hoverEnabled: this.config.general.mouseHover,
+            dockRight: this.dockRight(),
+            summaries: this.repoSummaries
+          })
         }
       }
       // Grips last among the pane chrome, so they sit on top of the borders they
@@ -3140,7 +3245,7 @@ export class TuiApp {
         const area = settingsArea(this.cols, this.rows)
         renderBlock(this.back, area, {
           borders: BORDER_ALL,
-          chars: PLAIN_BORDER,
+          chars: this.borderChars(),
           borderStyle: this.palette.focusBorder
         })
         this.settings.render(this.back, { x: area.x + 1, y: area.y + 1, width: area.width - 2, height: area.height - 2 }, this.palette)
@@ -3149,7 +3254,7 @@ export class TuiApp {
         const area = promptArea(this.cols, this.rows)
         renderBlock(this.back, area, {
           borders: BORDER_ALL,
-          chars: PLAIN_BORDER,
+          chars: this.borderChars(),
           borderStyle: this.palette.focusBorder
         })
         this.prompt.dialog.render(this.back, area, this.palette)
@@ -3158,7 +3263,7 @@ export class TuiApp {
         const area = this.menu.menu.area(this.cols, this.rows)
         renderBlock(this.back, area, {
           borders: BORDER_ALL,
-          chars: PLAIN_BORDER,
+          chars: this.borderChars(),
           borderStyle: this.palette.focusBorder
         })
         this.menu.menu.render(this.back, area, this.palette)
@@ -3167,7 +3272,7 @@ export class TuiApp {
         const area = this.branches.area(this.cols, this.rows)
         renderBlock(this.back, area, {
           borders: BORDER_ALL,
-          chars: PLAIN_BORDER,
+          chars: this.borderChars(),
           borderStyle: this.palette.focusBorder
         })
         this.branches.render(this.back, area, this.palette)
@@ -3176,7 +3281,7 @@ export class TuiApp {
         const area = confirmArea(this.cols, this.rows)
         renderBlock(this.back, area, {
           borders: BORDER_ALL,
-          chars: PLAIN_BORDER,
+          chars: this.borderChars(),
           borderStyle: this.palette.agent['blocked'] ?? this.palette.focusBorder
         })
         this.confirm.render(this.back, area, this.palette)
@@ -3294,7 +3399,7 @@ export class TuiApp {
       if (!view || view.sessionId === null) continue
       const record = paneById(this.state, entry.paneId)
       if (record?.exited === true) continue
-      const inner = this.config.ui.paneBorders ? innerOf(entry.rect) : entry.rect
+      const inner = this.paneBorders() ? innerOf(entry.rect) : entry.rect
       const cols = Math.max(1, inner.width)
       const rows = Math.max(1, inner.height)
       if (cols !== view.cols || rows !== view.rows) {

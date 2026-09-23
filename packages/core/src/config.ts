@@ -57,12 +57,28 @@ export interface GeneralConfig {
   readonly scrollStep: number
 }
 
+/**
+ * How a pane's border is drawn.
+ *
+ * `round` is the default and is what phase 12 changed: herdr's panes have rounded
+ * corners and ours were square, which is one of the eight differences that made the
+ * same program look like a different class of thing. `plain` is the square set this
+ * shipped with for eleven phases, and `off` reclaims the two columns and two rows a
+ * border costs.
+ *
+ * **`true` and `false` are still accepted in the config file**, and still mean exactly
+ * what they meant: `pane-borders = true` is `plain` — the square corners that value has
+ * always drawn — and `false` is `off`. Someone who wrote the boolean gets the borders
+ * they had; someone who wrote nothing gets the new design.
+ */
+export type PaneBorderStyle = 'plain' | 'round' | 'off'
+
 export interface UiConfig {
   readonly sidebar: boolean
   readonly sidebarWidth: number
   readonly tabBar: boolean
   readonly statusBar: boolean
-  readonly paneBorders: boolean
+  readonly paneBorders: PaneBorderStyle
   /**
    * How the split/close buttons on a pane's border are drawn.
    *
@@ -148,6 +164,27 @@ export interface SidebarConfig {
    * — from the filenames, offline, exactly as `suggest.rs`'s own fallback does.
    */
   readonly aiCommit: boolean
+  /**
+   * What a click on a changed file opens it with.
+   *
+   * `auto` — the default — means *the editor this terminal belongs to, if it belongs to
+   * one*. Running inside VS Code's integrated terminal (or Cursor's, or Windsurf's),
+   * clicking a row in the changes list opens that file there, at its first changed
+   * line. Running in a plain terminal it does nothing it did not already do: the click
+   * selects, and `e` or `o` open what they always opened. Detection changes the
+   * default, never the capability.
+   *
+   * `off` disables that entirely. Any other value is a **command name**, used always —
+   * `code`, `cursor`, `subl`, `idea` — for somebody who wants the GUI editor from a
+   * plain terminal too, or whose editor this cannot detect.
+   *
+   * Why a command and not a path: this is resolved on `PATH` in the *client's*
+   * environment at the moment of the click, never cached and never sent to the daemon.
+   * A daemon is long-lived and detached; the terminal a client is attached to is not
+   * the one that started it, and the well-known way to get this wrong is to remember
+   * an editor handle from a window that has since closed.
+   */
+  readonly openWith: string
 }
 
 export interface ThemeConfig {
@@ -287,7 +324,12 @@ export const DEFAULT_CONFIG: Config = {
   // transitions worth a noise are "your turn" and "it finished".
   sound: { agentDone: true, agentBlocked: true, donePath: '', blockedPath: '' },
   general: { shell: '', cwd: '', scrollback: 5000, mouse: true, mouseHover: true, scrollStep: 0 },
-  ui: { sidebar: true, sidebarWidth: 22, tabBar: true, statusBar: true, paneBorders: true, paneButtons: 'icons' },
+  // `sidebar-width` is 30 because the strip is a design and not a list of names: 22
+  // could not hold a workspace name, its branch and a two-line agent entry at the same
+  // time, and every other problem phase 12 set out to fix was harder at 22 columns.
+  // The dock's own minimum has been 34 since phase 7; 30 is the nearest number the
+  // workspace strip can justify without taking a third of an 80-column screen.
+  ui: { sidebar: true, sidebarWidth: 30, tabBar: true, statusBar: true, paneBorders: 'round', paneButtons: 'icons' },
   // Every default here is the behaviour phases 7 and 8 already shipped, so a user who
   // never opens the dialog sees no change at all. `icons: 'ascii'` is the one that is a
   // decision rather than an inheritance; see `SidebarConfig`.
@@ -299,7 +341,8 @@ export const DEFAULT_CONFIG: Config = {
     followPane: true,
     rememberView: false,
     preview: false,
-    aiCommit: false
+    aiCommit: false,
+    openWith: 'auto'
   },
   theme: {
     focusBorder: 6,
@@ -341,6 +384,21 @@ type Scalar =
    * declared and the problem names the alternatives.
    */
   | { readonly kind: 'enum'; readonly values: readonly string[] }
+  /**
+   * A named value that also still accepts the boolean it used to be.
+   *
+   * `ui.pane-borders` was a boolean for eleven phases and is now three named styles.
+   * Rejecting `pane-borders = true` would break every config file that set it, and
+   * silently mapping it to whatever the new default is would change what those files
+   * render. So the two booleans keep their old meanings as explicit aliases, and the
+   * problem list stays empty for a file that was correct yesterday.
+   */
+  | {
+      readonly kind: 'flag-enum'
+      readonly values: readonly string[]
+      readonly whenTrue: string
+      readonly whenFalse: string
+    }
   | { readonly kind: 'integer'; readonly min?: number; readonly max?: number }
   | { readonly kind: 'chord' }
 
@@ -380,7 +438,7 @@ const SCHEMA: readonly TableSpec[] = [
       { key: 'sidebar-width', kind: 'integer', min: 8, max: 80 },
       { key: 'tab-bar', kind: 'boolean' },
       { key: 'status-bar', kind: 'boolean' },
-      { key: 'pane-borders', kind: 'boolean' },
+      { key: 'pane-borders', kind: 'flag-enum', values: ['plain', 'round', 'off'], whenTrue: 'plain', whenFalse: 'off' },
       { key: 'pane-buttons', kind: 'enum', values: ['icons', 'ascii', 'off'] }
     ]
   },
@@ -394,7 +452,8 @@ const SCHEMA: readonly TableSpec[] = [
       { key: 'follow-pane', kind: 'boolean' },
       { key: 'remember-view', kind: 'boolean' },
       { key: 'preview', kind: 'boolean' },
-      { key: 'ai-commit', kind: 'boolean' }
+      { key: 'ai-commit', kind: 'boolean' },
+      { key: 'open-with', kind: 'string' }
     ]
   },
   {
@@ -462,6 +521,7 @@ const FIELD_PATHS: Readonly<Record<string, [keyof Config, string] | [keyof Confi
   'sidebar.remember-view': ['sidebar', 'rememberView'],
   'sidebar.preview': ['sidebar', 'preview'],
   'sidebar.ai-commit': ['sidebar', 'aiCommit'],
+  'sidebar.open-with': ['sidebar', 'openWith'],
   'theme.focus-border': ['theme', 'focusBorder'],
   'theme.idle-border': ['theme', 'idleBorder'],
   'theme.pane-title': ['theme', 'paneTitle'],
@@ -634,6 +694,23 @@ function applyField(
     case 'string':
       if (typeof raw !== 'string') {
         problems.push({ kind: 'wrong-type', path, message: `\`${path}\` must be a string` })
+        return
+      }
+      table[field_key] = raw
+      return
+    case 'flag-enum':
+      if (typeof raw === 'boolean') {
+        table[field_key] = raw ? field.whenTrue : field.whenFalse
+        return
+      }
+      if (typeof raw !== 'string' || !field.values.includes(raw)) {
+        problems.push({
+          kind: typeof raw === 'string' ? 'bad-value' : 'wrong-type',
+          path,
+          message: `\`${path}\` must be true, false, or one of ${field.values
+            .map((value) => `"${value}"`)
+            .join(', ')}`
+        })
         return
       }
       table[field_key] = raw

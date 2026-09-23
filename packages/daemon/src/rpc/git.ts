@@ -15,6 +15,7 @@ import {
   type GitDrawerActionResult,
   type GitDrawerId,
   type GitDrawerResult,
+  type GitFirstChangeResult,
   type GitStatusResult,
   type GitSuggestResult,
   type GitSummaryResult,
@@ -191,6 +192,20 @@ const DRAWER_ACTIONS: readonly GitDrawerActionId[] = [
   'tag.checkout',
   'tag.delete'
 ]
+
+/**
+ * Where to open a changed file.
+ *
+ * Its own method rather than a field on the status, because it costs a `git diff` per
+ * file and the status is fetched for every repository the dock looks at. A click asks
+ * about one file.
+ */
+export async function gitFirstChange(context: GitContext, params: Params): Promise<GitFirstChangeResult> {
+  const path = requireString(params, 'path')
+  const cwd = await resolveCwd(context, params)
+  const staged = optionalBoolean(params, 'staged') ?? false
+  return { path, line: await context.git.firstChangedLine(cwd, path, staged) }
+}
 
 /**
  * One drawer's rows.

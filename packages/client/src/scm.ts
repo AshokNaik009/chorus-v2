@@ -58,6 +58,14 @@ export type ScmOutcome =
   | { readonly kind: 'drawer'; readonly id: GitDrawerId; readonly fetch: boolean }
   /** A drawer row's context menu — the only place a drawer action is reachable. */
   | { readonly kind: 'drawerMenu'; readonly drawer: GitDrawerId; readonly row: GitDrawerRow }
+  /**
+   * Open a changed file in the editor this terminal belongs to.
+   *
+   * The panel does not know whether there *is* one — that is the client's environment
+   * and the app's question. It reports the gesture; the app decides what it means, and
+   * in a plain terminal it means nothing, which is the same as it meant before.
+   */
+  | { readonly kind: 'open'; readonly path: string; readonly staged: boolean }
 
 /**
  * A row in the flattened list.
@@ -226,11 +234,18 @@ export class ScmPanel {
     const index = this.view.indexAt(row, area.y + LIST_TOP, rows.length, this.listHeight(area))
     if (index === null || !selectable(rows[index])) return { kind: 'none' }
     this.cursor = index
-    // A click on a drawer header opens it, which is the gesture a `▸` invites. A click
-    // on a file row still only selects: staging is `⏎`, and phase 10 settled that a
-    // click is the lighter gesture everywhere in the dock.
+    // A click on a drawer header opens it, which is the gesture a `▸` invites.
     const hit = rows[index] as Row
     if (hit.kind === 'drawer') return this.toggleDrawer(hit)
+    // A click on a changed file asks to *read* it — which is what the same click does
+    // in VS Code's own Source Control panel, and what makes the changes list a list of
+    // work rather than a list of names. Staging is still `⏎` and discarding is still
+    // `d`, so nothing was taken away to pay for it. The app turns this into an editor
+    // only when this terminal belongs to one; otherwise the click just selected, as
+    // before. See `editor.ts`.
+    if (hit.kind === 'file' && hit.entry !== undefined) {
+      return { kind: 'open', path: hit.entry.path, staged: hit.staged === true }
+    }
     return { kind: 'none' }
   }
 
@@ -325,6 +340,13 @@ export class ScmPanel {
         const row = this.selected()
         if (row?.entry === undefined) return { kind: 'none' }
         return { kind: 'diff', path: row.entry.path, staged: row.staged === true }
+      }
+      case 'e': {
+        // The keyboard's way to the same thing, for the terminal where a click is not
+        // how you work — and the only way to it when the dock is not focused.
+        const row = this.selected()
+        if (row?.entry === undefined) return { kind: 'none' }
+        return { kind: 'open', path: row.entry.path, staged: row.staged === true }
       }
       case 'm':
         // herdr-sidebar's row menu. Only drawer rows have one here: the changes list's
@@ -514,4 +536,4 @@ export function renderScmPanel(
 
 /** The one-line hint for the status bar while the panel has the keyboard. */
 export const SCM_HINT =
-  '↑↓ move · ⏎ stage/open · m menu · →← drawer · a/u all · c commit · A draft · d discard · o diff · b branch · S sync · r refresh · esc close'
+  '↑↓ move · ⏎ stage/open · e edit · m menu · →← drawer · a/u all · c commit · A draft · d discard · o diff · b branch · S sync · r refresh · esc close'

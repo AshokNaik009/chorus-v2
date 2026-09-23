@@ -562,6 +562,25 @@ export interface GitSyncResult {
 }
 
 /**
+ * Where a file's first change is, so an editor can open on it.
+ *
+ * One number, because that is all a `--goto` needs. Null when the file has no diff to
+ * point at — untracked, binary, or a path this status does not know about — and the
+ * caller then opens the file at the top rather than inventing a line.
+ */
+export interface GitFirstChangeParams extends GitTargetParams {
+  /** Repo-relative, as the status gave it. */
+  readonly path: string
+  /** Ask the index side (`--staged`) rather than the working tree. */
+  readonly staged?: boolean
+}
+
+export interface GitFirstChangeResult {
+  readonly path: string
+  readonly line: number | null
+}
+
+/**
  * One repository's headline, for a sidebar row.
  *
  * The sidebar lists workspaces, and a workspace is a directory; the two facts a person
@@ -991,6 +1010,22 @@ export interface PreviewReadParams extends GitTargetParams {
   readonly path: string
   /** The dock's width, so a renderer that reflows reflows to the right number. */
   readonly width?: number
+  /**
+   * The root `path` is relative to, as `fs.list` reported it.
+   *
+   * **Sent because `path` alone is ambiguous.** The daemon can re-derive a root from
+   * `paneId`, and did — but it derives it *again*, at read time, from a pane whose live
+   * directory may have changed and which may not even be the pane that was focused when
+   * the tree was listed. A relative path outlives the root it was computed against, so
+   * the root has to travel with it. Without this, clicking a row previews whatever file
+   * has that name under the *new* root, or fails with "path escapes the root" — both of
+   * which were reachable by `cd`-ing in one pane and clicking in the dock.
+   *
+   * Omitted, the daemon falls back to `resolveRoot`, which is what every other caller
+   * of this RPC has always got. It grants no access `cwd` on `GitTargetParams` did not
+   * already grant: naming a directory is the escape hatch that field exists for.
+   */
+  readonly root?: string
 }
 
 export interface PreviewResult {

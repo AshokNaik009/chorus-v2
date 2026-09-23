@@ -54,6 +54,12 @@ const FLOOD_COMMAND = ['/bin/sh', '-c', 'yes "flood line .......................
  * own. And PHASE-4 criterion 7 asks specifically for the *full* UI — sidebar and tab
  * bar drawn — because that is where render cost creeps in, so the run states that it
  * is on rather than depending on a default staying true.
+ *
+ * **`sidebar-width` stays at 22 although phase 12 moved the default to 30.** The point
+ * of a recorded number is the comparison with the last one: changing the pinned width
+ * would change every pane's cell dimensions and make this run incomparable with the
+ * table already in RESULTS.md. What phase 12 needed measured is the new sidebar *code*,
+ * and that is measured either way.
  */
 const BENCH_CONFIG = `[ui]
 sidebar = true

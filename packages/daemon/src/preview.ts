@@ -498,7 +498,11 @@ export class PreviewService {
     const base = canonicalPath(root)
     const full = canonicalPath(join(base, relative))
     if (full !== base && !full.startsWith(`${base}${sep}`)) {
-      throw new RequestError(ErrorCodes.badRequest, `path escapes the root: ${relative}`)
+      // **Both sides, not just the path.** This message used to name only `relative`,
+      // and a reader could not tell whether the path was wrong or the root was — which
+      // is exactly the question when the two are resolved at different moments. The
+      // root is the half that was missing and the half that was usually at fault.
+      throw new RequestError(ErrorCodes.badRequest, `path escapes the root: ${relative} (root ${base})`)
     }
     return full
   }

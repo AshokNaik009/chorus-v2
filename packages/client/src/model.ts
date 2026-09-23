@@ -128,9 +128,13 @@ export function paneTitle(pane: PaneRecord): string {
  * protocol asks of a client.
  */
 const STATUS_GLYPHS: Readonly<Record<string, string>> = {
-  idle: '·',
-  working: '*',
-  blocked: '!',
+  // **The fill is the state.** Hollow idle, solid working, ringed blocked — one shape
+  // per state, so the dot carries the state and its *colour* is free to carry identity,
+  // which is what `palette.ts` spends it on. `·`, `*` and `!` said the same three
+  // things in three unrelated shapes and left colour as the only real channel.
+  idle: '○',
+  working: '●',
+  blocked: '◉',
   unknown: '?',
   done: '✓'
 }

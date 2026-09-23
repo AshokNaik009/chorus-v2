@@ -1,6 +1,8 @@
 /**
  * Snapshot -> cell buffer.
  *
+ * 
+ * 
  * This is the hot loop of the whole client: it runs once per visible pane per frame, so
  * 15 panes of 200x50 is 150,000 cells of work inside a 16 ms budget. Two things keep it
  * inside that budget:

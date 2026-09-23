@@ -611,6 +611,8 @@ export class DaemonServer {
         return gitRpc.gitSuggest(this.gitContext(), params)
       case 'git.summary':
         return gitRpc.gitSummary(this.gitContext(), params)
+      case 'git.firstChange':
+        return gitRpc.gitFirstChange(this.gitContext(), params)
       case 'git.drawer':
         return gitRpc.gitDrawer(this.gitContext(), params)
       case 'git.drawerAction':
