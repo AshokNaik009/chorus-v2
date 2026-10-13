@@ -17,6 +17,7 @@ import {
   decodeWritePayload,
   isRequestMessage,
   negotiate,
+  type AgentFileActivity,
   type DaemonInfo,
   type EventMessage,
   type MethodName,
@@ -32,6 +33,7 @@ import * as model from './rpc/session-model.js'
 import type { AgentDetector } from '@leap-chorus/detect'
 
 import * as agents from './rpc/agents.js'
+import { parseAgentActivity } from './agent-activity.js'
 import * as gitRpc from './rpc/git.js'
 import * as pluginRpc from './rpc/plugins.js'
 import * as previewRpc from './rpc/preview.js'
@@ -43,6 +45,7 @@ import { PluginRunner } from './plugins/run.js'
 import { PreviewService } from './preview.js'
 import { SearchService } from './search.js'
 import { SuggestService } from './suggest.js'
+import { DiffService } from './git-diff.js'
 import { GitDrawerService } from './git-drawers.js'
 import { GitService } from './git.js'
 import { WorktreeService } from './worktree.js'
@@ -121,6 +124,8 @@ export class DaemonServer {
   private readonly gitService = new GitService()
   /** The eight Source Control drawers. One git command each, on expand. */
   private readonly gitDrawerService = new GitDrawerService()
+  /** Structured patches for the Changes overlay. Nothing cached; see git-diff.ts. */
+  private readonly diffService = new DiffService()
   /** Directory listings for the explorer. The client has no filesystem of its own. */
   private readonly fsService = new FsService()
   /** Quick open and content search. Shells out to `rg`; stateless like the rest. */
@@ -144,6 +149,7 @@ export class DaemonServer {
     return {
       git: this.gitService,
       drawers: this.gitDrawerService,
+      diffs: this.diffService,
       suggest: this.suggestService,
       fs: this.fsService,
       paneCwdInput: (paneId) => this.runtime.paneCwdInput(paneId)
@@ -180,6 +186,7 @@ export class DaemonServer {
   private config: LoadedConfig
 
   private readonly clients = new Set<ClientState>()
+  private readonly fileActivity = new Map<string, readonly AgentFileActivity[]>()
   private unsubscribeSessions: (() => void) | null = null
   private closing = false
 
@@ -560,8 +567,21 @@ export class DaemonServer {
         return this.reloadConfig(params)
 
       // --- agents (PHASE-5 Part A) ------------------------------------------
-      case 'agent.report':
-        return agents.agentReport(this.modelContext(), params)
+      case 'agent.report': {
+        const activity = parseAgentActivity(params)
+        const result = agents.agentReport(this.modelContext(), params)
+        if (result.accepted && activity !== null) {
+          for (const id of this.fileActivity.keys()) if (!this.runtime.state.panes.has(id)) this.fileActivity.delete(id)
+          this.fileActivity.set(activity.paneId, [...(this.fileActivity.get(activity.paneId) ?? []), activity].slice(-64))
+          this.broadcastAll({ type: 'event', event: 'agent.activity', activity })
+        }
+        return result
+      }
+      case 'agent.activity': {
+        const paneId = requireString(params, 'paneId')
+        if (!this.runtime.state.panes.has(paneId)) throw new RequestError(ErrorCodes.paneNotFound, `no pane ${paneId}`)
+        return { events: this.fileActivity.get(paneId) ?? [] }
+      }
       case 'agent.read':
         return agents.agentRead(this.modelContext(), params)
       case 'agent.explain':
@@ -617,6 +637,8 @@ export class DaemonServer {
         return gitRpc.gitDrawer(this.gitContext(), params)
       case 'git.drawerAction':
         return gitRpc.gitDrawerAction(this.gitContext(), params)
+      case 'git.diff':
+        return gitRpc.gitDiff(this.gitContext(), params)
       case 'worktree.list':
         return worktrees.worktreeList(this.worktreeContext(), params)
       case 'worktree.create':

@@ -61,7 +61,7 @@ user, plus the view enums in `scm_app.rs` and `explorer_app.rs`.
 |---|---|---|
 | Stage / unstage / discard | **done** | rename-aware on both sides of the index |
 | Commit | **done** | via the prompt line |
-| Inspect diffs (`o`) | **partial** | opens a pager pane, not an in-panel diff |
+| Inspect diffs (`o`) | done | phase 13: the Changes overlay — full-screen, not in the 34-column dock. `P` inside it keeps the pager-pane route |
 | Copy a hash / branch / URL / path | **done** | OSC 52, and it says so — see the divergences |
 | AI commit draft (`A`, ✧) via local `claude` CLI | **done** | `suggest.ts`, opt-in; filename draft is the default |
 | Sync with upstream (`S`) | **done** | `pull --rebase --autostash` then `push` |
@@ -218,7 +218,7 @@ from herdr-sidebar will notice a difference.
 |---|---|
 | No built-in editor | We launch `$EDITOR` in a pane, which beats a worse editor. `editor.rs` is 1,157 lines and labelled experimental upstream. |
 | No image or video preview | Needs terminal graphics protocols PLAN.md rules out. |
-| Diffs and files open in a pager pane | The user has already chosen `bat` / `delta` / `less`. **Phase 9 revisited this and did not reverse it**: the embedded preview is opt-in (`[sidebar] preview`, off) and is for glancing. `⏎` still opens a pane by default, and `⏎` inside the preview hands the file to `$PAGER`. |
+| Files open in a pager pane | The user has already chosen `bat` / `delta` / `less`. **Phase 9 revisited this and did not reverse it**: the embedded preview is opt-in (`[sidebar] preview`, off) and is for glancing. `⏎` still opens a pane by default, and `⏎` inside the preview hands the file to `$PAGER`. **Phase 13 split diffs off from this**: a diff is not a file, the question "what did this agent change" is asked often enough to deserve a surface, and the overlay takes the whole terminal rather than the dock. `P` in the overlay still reaches the user's own pager. |
 | No syntax highlighting, even with `bat` installed | The dock paints its own styles and cannot consume ANSI, so `bat` is run with `--color=never`. What it contributes is the user's own wrapping, tab and encoding handling; the colour is the part that does not survive the trip. |
 | ASCII glyphs by default | Nerd Font glyphs are Private Use Area; `codePointWidth` measures them as one column and a disagreeing terminal shifts every hit region. `[sidebar] icons` now offers `emoji` and `nerd` for anybody who knows their font. |
 | One repository, not multi-repo | Switching pane switches repository, which is the right shape for a multiplexer. **Settled in phase 9**; it was an orphan only for want of a written decision. |

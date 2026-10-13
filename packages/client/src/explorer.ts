@@ -119,6 +119,9 @@ export class ExplorerPanel {
   error: string | null = null
   status: GitStatusResult | null = null
   showHidden = false
+  context = ''
+  activityNote = ''
+  readonly activity = new Map<string, 'read' | 'write'>()
   /**
    * The glyph set, handed down by the container from `[sidebar] icons`.
    *
@@ -128,6 +131,8 @@ export class ExplorerPanel {
    */
   icons: IconTheme = ASCII_THEME
   private cursor = 0
+  private manualScroll = false
+  private revealedPath: string | null = null
   private readonly view = new ScrollView()
 
   /**
@@ -138,26 +143,62 @@ export class ExplorerPanel {
    * every `r` — or on every git change, once this polls — would make the key useless.
    */
   adopt(root: string, path: string, entries: readonly FsEntry[]): void {
+    if (root !== this.root) {
+      if (path !== '') return
+      this.roots = null
+      this.cursor = 0
+      this.view.offset = 0
+      this.status = null
+      this.activity.clear()
+      this.activityNote = ''
+      this.revealedPath = null
+    }
+    const selected = this.selected()?.path
     this.root = root
     this.error = null
     const fresh = entries.map((entry) => makeNode(entry, path))
 
     if (path === '') {
       this.roots = merge(this.roots, fresh)
-      this.clampCursor()
-      return
+    } else {
+      const node = this.find(path)
+      if (node === null) return
+      const firstLoad = node.children === null && !node.loading
+      node.children = merge(node.children, fresh)
+      node.loading = false
+      if (firstLoad) node.expanded = true
     }
-    const node = this.find(path)
-    if (node === null) return
-    node.children = merge(node.children, fresh)
-    node.loading = false
-    node.expanded = true
+    if (selected !== undefined) {
+      let path = selected
+      while (path !== '' && !this.select(path)) path = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+    }
     this.clampCursor()
   }
 
-  fail(message: string): void {
+  expandedPaths(): string[] {
+    return this.rows().filter((row) => row.node.kind === 'dir' && row.node.expanded).map((row) => row.node.path)
+  }
+
+  select(path: string): boolean {
+    const index = this.rows().findIndex((row) => row.node.path === path)
+    if (index !== -1) this.cursor = index
+    return index !== -1
+  }
+
+  reveal(path: string): void {
+    this.revealedPath = path
+    const parts = path.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const node = this.find(parts.slice(0, i).join('/'))
+      if (node !== null) node.expanded = true
+    }
+    this.select(path)
+    this.manualScroll = false
+  }
+
+  fail(message: string, path?: string): void {
     this.error = message
-    const node = this.selected()
+    const node = path === undefined ? this.selected() : this.find(path)
     if (node !== null) node.loading = false
   }
 
@@ -171,7 +212,8 @@ export class ExplorerPanel {
   }
 
   private visible(nodes: TreeNode[]): TreeNode[] {
-    return this.showHidden ? nodes : nodes.filter((node) => !node.name.startsWith('.'))
+    return this.showHidden ? nodes : nodes.filter((node) => !node.name.startsWith('.') ||
+      this.revealedPath === node.path || this.revealedPath?.startsWith(`${node.path}/`))
   }
 
   /** The flattened, currently-drawable rows. */
@@ -202,6 +244,13 @@ export class ExplorerPanel {
 
 
   handleKey(name: string, char: string | undefined): ExplorerOutcome {
+    this.manualScroll = false
+    if (name === 'home') this.cursor = 0
+    if (name === 'end') this.cursor = Math.max(0, this.rows().length - 1)
+    if (name === 'pageup' || name === 'pagedown') {
+      this.cursor += name === 'pageup' ? -10 : 10
+      this.clampCursor()
+    }
     if (name === 'escape') return { kind: 'close' }
     if (name === 'up' || char === 'k') {
       this.cursor -= 1
@@ -233,6 +282,7 @@ export class ExplorerPanel {
         return node === null ? { kind: 'none' } : { kind: 'menu', path: node.path, isDir: node.kind === 'dir' }
       }
       case '.':
+        this.revealedPath = null
         this.showHidden = !this.showHidden
         this.clampCursor()
         return { kind: 'none' }
@@ -257,6 +307,7 @@ export class ExplorerPanel {
       return { kind: 'none' }
     }
     node.loading = true
+    node.expanded = true
     return { kind: 'expand', path: node.path }
   }
 
@@ -305,6 +356,7 @@ export class ExplorerPanel {
 
   /** Scroll without moving the cursor. The next keystroke pulls the view back to it. */
   scrollBy(delta: number, area: Rect): void {
+    this.manualScroll = true
     this.view.by(delta, this.rows().length, Math.max(0, area.height - LIST_TOP))
   }
 
@@ -317,7 +369,10 @@ export class ExplorerPanel {
   decoration(path: string, kind: TreeNode['kind']): string | null {
     const index = this.decorations()
     if (index === null) return null
-    if (kind === 'dir') return index.dirs.has(path) ? '·' : null
+    if (kind === 'dir') {
+      const count = index.dirs.get(path) ?? 0
+      return count === 0 ? null : count === 1 ? '·' : `${count}·`
+    }
     return index.files.get(path) ?? null
   }
 
@@ -337,26 +392,29 @@ export class ExplorerPanel {
   private decorationCache: {
     readonly status: GitStatusResult
     readonly files: Map<string, string>
-    readonly dirs: Set<string>
+    readonly dirs: Map<string, number>
   } | null = null
 
-  private decorations(): { files: Map<string, string>; dirs: Set<string> } | null {
+  private decorations(): { files: Map<string, string>; dirs: Map<string, number> } | null {
     const status = this.status
     if (status === null) return null
     const cached = this.decorationCache
     if (cached !== null && cached.status === status) return cached
     const files = new Map<string, string>()
-    const dirs = new Set<string>()
+    const dirs = new Map<string, number>()
     // Staged first, then unstaged, so the unstaged letter wins where a path is on both
     // sides — which is what the old `unstaged ?? staged` ordering said.
     for (const side of [status.staged, status.unstaged]) {
       for (const entry of side) {
+        const seen = files.has(entry.path)
         files.set(entry.path, entry.letter)
+        if (seen) continue
         // Every ancestor directory of a touched path is itself touched. Walking up once
         // per change is what replaces the per-directory `startsWith` scan.
         let slash = entry.path.indexOf('/')
         while (slash !== -1) {
-          dirs.add(entry.path.slice(0, slash))
+          const dir = entry.path.slice(0, slash)
+          dirs.set(dir, (dirs.get(dir) ?? 0) + 1)
           slash = entry.path.indexOf('/', slash + 1)
         }
       }
@@ -375,6 +433,8 @@ export class ExplorerPanel {
       palette.sidebarActive,
       right
     )
+
+    if (area.height > 1) buffer.writeString(area.x, area.y + 1, truncate(this.activityNote || this.context, area.width), palette.agent['idle'] ?? palette.sidebar, right)
 
     if (this.error !== null) {
       // Wrapped, not clipped: a stage that stopped at a nested repository says so in a
@@ -399,22 +459,29 @@ export class ExplorerPanel {
 
     const bar = needsScrollbar(rows.length, height)
     const room = area.width - (bar ? 1 : 0)
-    const offset = this.view.follow(this.cursor, rows.length, height)
+    const offset = this.manualScroll
+      ? this.view.clamp(rows.length, height)
+      : this.view.follow(this.cursor, rows.length, height)
     let y = area.y + LIST_TOP
     for (const row of rows.slice(offset, offset + height)) {
       const isSelected = rows[this.cursor]?.node === row.node
-      const rowStyle = isSelected ? palette.sidebarActive : palette.sidebar
+      const activity = this.activity.get(row.node.path)
+      const activityStyle = activity === undefined ? palette.sidebar : {
+        ...palette.sidebar,
+        fg: activity === 'write' ? palette.agent['working']?.fg ?? 3 : palette.focusBorder?.fg ?? 6
+      }
+      const rowStyle = isSelected ? palette.sidebarActive : activityStyle
       buffer.fill({ x: area.x, y, width: room, height: 1 }, ' ', rowStyle)
 
       // `>` folded, `v` open, two spaces for a file: the marker column is always there
       // so names line up whatever a row happens to be.
-      const marker = row.node.kind !== 'dir' ? '  ' : row.node.loading ? '· ' : row.node.expanded ? 'v ' : '> '
+      const marker = row.node.kind !== 'dir' ? activity === undefined ? '  ' : activity === 'read' ? 'R ' : 'W ' : row.node.loading ? '· ' : row.node.expanded ? 'v ' : '> '
       const indent = '  '.repeat(row.depth)
       const icon = iconFor(this.icons, row.node.name, row.node.kind, row.node.expanded)
       const name = row.node.kind === 'dir' ? `${row.node.name}/` : row.node.name
       const letter = this.decoration(row.node.path, row.node.kind)
       // The letter is pinned to the right edge, so the eye reads one column of them.
-      const space = room - (letter === null ? 0 : 2)
+      const space = room - (letter === null ? 0 : letter.length + 1)
       // `truncate`, not a `slice`: this used to clip by **character count** while every
       // other panel in the dock measured columns, so a CJK filename was cut at half the
       // width it had been given and the row ended in a blank column with no `…` to say
@@ -430,7 +497,7 @@ export class ExplorerPanel {
       )
       if (letter !== null) {
         buffer.writeString(
-          area.x + room - 1,
+          area.x + Math.max(0, room - letter.length),
           y,
           letter,
           isSelected ? rowStyle : letterStyle(letter, palette),

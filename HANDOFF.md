@@ -1,5 +1,43 @@
 # Handoff — end of Phase 12
 
+## Latest follow-up — native viewer and Claude file activity
+
+The native viewer now uses a per-pane `FileBrowser` controller. Filesystem and
+preview reads remain daemon-owned; rendering remains in the terminal client.
+Requests carry their tree root and reject stale replies, including repeated reads
+of the same file. Refresh preserves expanded folders and path-based selection.
+Source previews have line numbers, bounded native syntax highlighting, wrapping,
+horizontal panning, and preview zoom. Unknown or oversized syntax inputs fall back
+to plain text; binary files remain explicitly identified rather than rendered.
+
+Claude activity is opt-in through the existing Settings → Integrations install/update
+flow. The version-2 hook reports only read/write/refresh metadata, never tool contents,
+and reads its bounded input from stdin rather than exporting it in the environment.
+The daemon rejects out-of-order reports, retains up to 64 events per pane for newly
+attached clients, and broadcasts accepted activity. Installation preserves custom
+hooks even when they share a matcher group with an older Chorus hook.
+
+- `a` in the tree toggles activity-follow, initially off. Manual tree navigation,
+  clicks, or scrolling pause it. Following reveals the file in the tree but never
+  changes the file currently open in the preview.
+- `p` pins/unpins the browser. Pinning also binds tree staging to the displayed root
+  when the shell changes directory; reloading `sidebar.follow-pane` affects open docks.
+- `r` refreshes; in the preview it can retry a failed read. `w` wraps, `z` zooms, and
+  `Tab` switches tree/preview focus where both are visible. Enter opens `$PAGER`.
+- Hidden docks do no scheduled filesystem work; stale activity does not move selection
+  when reopening. Pane removal disposes timers and invalidates pending requests.
+- The known top/bottom split test race described below now waits for the actual
+  divider, retaining the same geometry assertion instead of assuming the pane-count
+  status means the layout has finished rendering.
+
+Verification: `pnpm test` passes **94 files / 1,648 tests**, including real PTY clients,
+real daemon sockets, multiple repositories, pin/follow reloads, and hook installation.
+`pnpm build`, `pnpm typecheck`, and `git diff --check` also pass. Run the full suite
+alone, as noted in the getting-started commands below.
+
+Integration tests use temporary homes and data roots. No live Claude settings were
+changed to enable this feature. Earlier phase notes and measurements follow below.
+
 **Read `PLAN.md` first, then `phases/PARITY.md`.** This file is the state of the world
 as this session leaves it. Everything was measured on **2026-09-22**, macOS (darwin
 25.6.0, arm64, Apple silicon, 10 cores), Node v22.1.0, pnpm 10.18.0. **`rg`, `bat`,
@@ -339,11 +377,19 @@ a fourth sentence here.**
   time. Unchanged from phases 10 and 11.
 - **`RESULTS.md`'s generator still destroys its hand-written sections.** Fourth handoff
   to say so.
-- **Everything in phase 11's *Open threads* is still open**: no end-to-end drawer test
-  through `TuiHarness`, no drawer refresh on its own, `Show Changes` is still a pager
-  pane, `follow-pane` is unwired, no syntax highlighting, `DaemonClient` has no request
-  timeout, and phase 5's criterion 2 (detection against a running agent) is still the
-  important gap.
+- **Everything in phase 11's *Open threads* is still open**, minus one: no end-to-end
+  drawer test through `TuiHarness`, no drawer refresh on its own, `follow-pane` is
+  unwired, no syntax highlighting, `DaemonClient` has no request timeout, and phase 5's
+  criterion 2 (detection against a running agent) is still the important gap.
+  **`Show Changes` is half-closed**: phase 13 gave the *working tree* an in-app diff —
+  the Changes overlay — but a commit or a stash row still opens a pager pane, because
+  that needs a commit-range baseline the overlay does not yet have. See `PHASE-13.md`.
+- **The Changes overlay shows nothing for an agent that commits as it goes**, which
+  Claude Code does. Its baseline is the working tree against `HEAD`, chosen so that the
+  overlay and the Source Control list can never disagree. `herdr-file-viewer`'s `b` key
+  — `git merge-base <base> HEAD` — is the fix, and is the most valuable single follow-up
+  in this area: a `baseline` field on `GitDiffParams` and an `against` ref in
+  `DiffService.diff`.
 - **The uncommitted `[sidebar] open-with` work was already in the tree when this phase
   started** (`editor.ts`, `editor.test.ts`, and changes across `app.ts`, `scm.ts`,
   `git.ts` and the protocol). It is not phase 12's; it now carries the fix below and is

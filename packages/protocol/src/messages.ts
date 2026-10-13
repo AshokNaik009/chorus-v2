@@ -74,6 +74,8 @@ import type {
   GitBranchesResult,
   GitCheckoutParams,
   GitCommitParams,
+  GitDiffParams,
+  GitDiffResult,
   GitDrawerActionParams,
   GitDrawerActionResult,
   GitDrawerParams,
@@ -428,6 +430,7 @@ export interface SessionModelMethodMap {
  */
 export interface AgentMethodMap {
   'agent.report': { params: AgentReportParams; result: AgentReportResult }
+  'agent.activity': { params: { paneId: string }; result: { events: readonly import('./session-model.js').AgentFileActivity[] } }
   'agent.explain': { params: AgentExplainParams; result: AgentExplainResult }
   'agent.read': { params: AgentReadParams; result: AgentReadResult }
   'agent.reload_manifests': { params: AgentReloadManifestsParams; result: AgentReloadManifestsResult }
@@ -458,6 +461,13 @@ export interface AgentMethodMap {
   'git.firstChange': { params: GitFirstChangeParams; result: GitFirstChangeResult }
   'git.drawer': { params: GitDrawerParams; result: GitDrawerResult }
   'git.drawerAction': { params: GitDrawerActionParams; result: GitDrawerActionResult }
+  /**
+   * A structured patch for the Changes overlay. See PHASE-13.
+   *
+   * Hunks and line numbers, not text: the client paints its own styles and cannot
+   * consume ANSI, so nothing downstream re-parses a `@@` header.
+   */
+  'git.diff': { params: GitDiffParams; result: GitDiffResult }
 
   'worktree.list': { params: WorktreeListParams; result: WorktreeListResult }
   'worktree.create': { params: WorktreeCreateParams; result: WorktreeCreateResult }
@@ -475,6 +485,7 @@ export interface AgentMethodMap {
 /** The PHASE-5 methods, as a value, so a test can assert none is missing. */
 export const AGENT_METHODS = [
   'agent.report',
+  'agent.activity',
   'agent.explain',
   'agent.read',
   'agent.reload_manifests',
@@ -497,6 +508,7 @@ export const AGENT_METHODS = [
   'git.firstChange',
   'git.drawer',
   'git.drawerAction',
+  'git.diff',
   'worktree.list',
   'worktree.create',
   'worktree.open',
@@ -589,6 +601,7 @@ export type ResponseMessage<M extends MethodName = MethodName> =
   | { readonly type: 'res'; readonly id: number; readonly ok: false; readonly error: ErrorBody }
 
 export type EventMessage =
+  | { readonly type: 'event'; readonly event: 'agent.activity'; readonly activity: import('./session-model.js').AgentFileActivity }
   /** The session produced output; `sequence` identifies how much. Pull a snapshot to see it. */
   | { readonly type: 'event'; readonly event: 'session.output'; readonly id: string; readonly sequence: number }
   | { readonly type: 'event'; readonly event: 'session.exit'; readonly id: string; readonly exit: SessionExit }

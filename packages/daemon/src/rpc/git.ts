@@ -17,12 +17,14 @@ import {
   type GitDrawerResult,
   type GitFirstChangeResult,
   type GitStatusResult,
+  type GitDiffResult,
   type GitSuggestResult,
   type GitSummaryResult,
   type GitSyncResult
 } from '@leap-chorus/protocol'
 import type { FsService } from '../fs.js'
 import { liveCwd } from '../cwd.js'
+import type { DiffService } from '../git-diff.js'
 import { DRAWER_IDS, type GitDrawerService } from '../git-drawers.js'
 import type { GitService, GitStatus } from '../git.js'
 import type { SuggestService } from '../suggest.js'
@@ -41,6 +43,8 @@ export interface GitContext {
   readonly git: GitService
   /** The eight drawers. Separate from `git`: it reads history, not the working tree. */
   readonly drawers: GitDrawerService
+  /** The Changes overlay's structured patches. See `git-diff.ts`. */
+  readonly diffs: DiffService
   /** Commit-message drafting. See `suggest.ts` for why the model half is opt-in. */
   readonly suggest: SuggestService
   readonly fs: FsService
@@ -104,7 +108,7 @@ function wire(status: GitStatus): GitStatusResult {
  * checkout.
  */
 export async function fsList(context: GitContext, params: Params): Promise<FsListResult> {
-  const root = await resolveRoot(context, params)
+  const root = optionalString(params, 'root') ?? await resolveRoot(context, params)
   const listing = await context.fs.list(root, optionalString(params, 'path') ?? '')
   return { root, path: listing.path, entries: listing.entries }
 }
@@ -236,4 +240,20 @@ export async function gitDrawerAction(context: GitContext, params: Params): Prom
   const cwd = await resolveCwd(context, params)
   const message = await context.drawers.act(cwd, action, requireString(params, 'ref'))
   return { message, status: wire(await context.git.status(cwd)) }
+}
+
+/**
+ * A structured patch for the Changes overlay.
+ *
+ * `resolveCwd`, not `resolveRoot`: the service resolves the root itself, from the same
+ * `git.status` call it needs anyway for the branch and the untracked list. Asking here
+ * as well would be a second `rev-parse` for an answer we are about to be given.
+ */
+export async function gitDiff(context: GitContext, params: Params): Promise<GitDiffResult> {
+  const cwd = await resolveCwd(context, params)
+  return await context.diffs.diff(context.git, cwd, {
+    paths: optionalStringArray(params, 'paths'),
+    staged: optionalBoolean(params, 'staged'),
+    context: optionalNumber(params, 'context')
+  })
 }

@@ -372,7 +372,7 @@ export class PreviewService {
    * symlink that points outside both fail rather than being caught by a string test
    * that a crafted name can walk past.
    */
-  async read(root: string, relative: string, width: number): Promise<PreviewOutcome> {
+  async read(root: string, relative: string, width: number, raw = false): Promise<PreviewOutcome> {
     const path = this.resolveWithin(root, relative)
 
     // Binary first, and from its own small read. Deciding this from the text-sized read
@@ -394,7 +394,7 @@ export class PreviewService {
     const read = await readBounded(path, this.maxBytes)
     const bytesRead = probe.bytesRead + read.bytesRead
 
-    if (this.useRenderers) {
+    if (this.useRenderers && !raw && !read.more) {
       const rendered = await this.render(rendererFor(relative), path, root, width)
       if (rendered !== null) {
         const { lines, cap } = this.splitLines(rendered, read.more)

@@ -48,6 +48,7 @@ const CLAUDE_HOOKS: readonly { event: string; action: string; matcher?: string }
   { event: 'UserPromptSubmit', action: 'working' },
   { event: 'PreToolUse', action: 'working' },
   { event: 'PostToolUse', action: 'working' },
+  { event: 'PostToolUseFailure', action: 'working', matcher: 'Bash' },
   { event: 'Notification', action: 'blocked' },
   { event: 'Stop', action: 'idle' },
   { event: 'SessionEnd', action: 'idle' }
@@ -209,7 +210,11 @@ export function writeClaudeSettings(path: string, hookPath: string): boolean {
 
     // Otherwise drop our own stale entries — a previous install at a different path,
     // or this event with a different action — and leave every entry that is not ours.
-    const kept = entries.filter((entry) => !ownsHookEntry(entry, hookPath))
+    const kept = entries.flatMap((entry) => {
+      if (!ownsHookEntry(entry, hookPath)) return [entry]
+      const remaining = asArray(asObject(entry)['hooks']).filter((hook) => !ownsHookEntry({ hooks: [hook] }, hookPath))
+      return remaining.length === 0 ? [] : [{ ...asObject(entry), hooks: remaining }]
+    })
     kept.push(desired)
     hooks[event] = kept
     changed = true

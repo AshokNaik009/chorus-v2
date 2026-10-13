@@ -20,7 +20,7 @@
  * escape gives it back.
  */
 
-import { ScreenBuffer, truncate, type Rect } from '@leap-chorus/tui'
+import { ScreenBuffer, truncate, type Rect, type Style } from '@leap-chorus/tui'
 import type { GitDrawerId, GitDrawerRow, GitFileEntry, GitStatusResult } from '@leap-chorus/protocol'
 import { wrapWords, type Palette } from './chrome.js'
 import { DrawersPanel, fitRowText } from './drawers.js'
@@ -41,6 +41,8 @@ export type ScmOutcome =
   | { readonly kind: 'diff'; readonly path: string; readonly staged: boolean }
   /** Open the branch picker. The app fetches the branches; the panel holds none. */
   | { readonly kind: 'branches' }
+  /** The `±` on the branch line: review this repository's changes. */
+  | { readonly kind: 'review' }
   | { readonly kind: 'sync' }
   /**
    * Draft a commit message and open the commit box with it already filled in.
@@ -228,8 +230,13 @@ export class ScmPanel {
    * a click lands on a file row — through the viewport's offset, so what is clicked is
    * what was drawn rather than the row that would have been there with no scrolling.
    */
-  handleClick(row: number, area: Rect): ScmOutcome {
-    if (row === area.y && this.status !== null) return { kind: 'branches' }
+  handleClick(row: number, area: Rect, column?: number): ScmOutcome {
+    if (row === area.y && this.status !== null) {
+      // The row is two buttons now. The `±` is flush right and is checked first,
+      // because everything to its left is still the branch picker.
+      const reviewFrom = area.x + area.width - REVIEW_GLYPH.length
+      return column !== undefined && column >= reviewFrom ? { kind: 'review' } : { kind: 'branches' }
+    }
     const rows = this.rows()
     const index = this.view.indexAt(row, area.y + LIST_TOP, rows.length, this.listHeight(area))
     if (index === null || !selectable(rows[index])) return { kind: 'none' }
@@ -411,11 +418,21 @@ export class ScmPanel {
   }
 }
 
+/**
+ * The Changes button on the branch line. Latin-1 and narrow — see `chrome.ts`.
+ */
+const REVIEW_GLYPH = '±'
+
 /** Rows above the file list: the branch line and a blank. */
 const LIST_TOP = 2
 
-/** The status letter's colour, by role rather than by letter. */
-function letterStyle(letter: string, palette: Palette) {
+/**
+ * The status letter's colour, by role rather than by letter.
+ *
+ * Exported for the Changes overlay, so its file index and this list cannot disagree
+ * about what colour a `U` is — they are showing the same files.
+ */
+export function letterStyle(letter: string, palette: Palette): Style {
   if (letter === '!') return palette.agent['blocked'] ?? palette.sidebar
   if (letter === 'U' || letter === 'A') return palette.agent['done'] ?? palette.sidebar
   if (letter === 'D') return palette.agent['blocked'] ?? palette.sidebar
@@ -439,13 +456,20 @@ export function renderScmPanel(
     status === null || !status.hasUpstream
       ? ''
       : `${status.ahead > 0 ? ` ↑${status.ahead}` : ''}${status.behind > 0 ? ` ↓${status.behind}` : ''}`
+  const branchStyle = focused ? palette.sidebarActive : palette.sidebar
+  // `±` flush right on the branch line: the one place in the dock that already says
+  // which repository is being shown is the right place to ask what changed in it.
+  const reserved = status === null ? 0 : REVIEW_GLYPH.length + 1
   buffer.writeString(
     area.x,
     area.y,
-    truncate(`${focused ? '▸ ' : '  '}${branch}${counts}`, area.width),
-    focused ? palette.sidebarActive : palette.sidebar,
+    truncate(`${focused ? '▸ ' : '  '}${branch}${counts}`, Math.max(0, area.width - reserved)),
+    branchStyle,
     right
   )
+  if (status !== null && area.width > reserved) {
+    buffer.writeString(right - REVIEW_GLYPH.length, area.y, REVIEW_GLYPH, branchStyle, right)
+  }
 
   // Under the branch line: what the last remote operation said. Truncated rather than
   // wrapped, unlike an error — this one leads with its conclusion.
@@ -536,4 +560,4 @@ export function renderScmPanel(
 
 /** The one-line hint for the status bar while the panel has the keyboard. */
 export const SCM_HINT =
-  '↑↓ move · ⏎ stage/open · e edit · m menu · →← drawer · a/u all · c commit · A draft · d discard · o diff · b branch · S sync · r refresh · esc close'
+  '↑↓ move · ⏎ stage/open · e edit · m menu · →← drawer · a/u all · c commit · A draft · d discard · o review changes · b branch · S sync · r refresh · esc close'

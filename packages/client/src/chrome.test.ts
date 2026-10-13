@@ -26,6 +26,7 @@ import {
   diffBuffers,
   encodeFrame,
   renderBlock,
+  stringWidth,
   type Rect
 } from '@leap-chorus/tui'
 import { DEFAULT_CONFIG, validateConfig } from '@leap-chorus/core'
@@ -234,7 +235,7 @@ describe('the rhythm is one row (criterion 2)', () => {
       '  4 ✓ data-pipeline',
       '      main ↓2',
       '',
-      ' + new      ▤ files      menu',
+      ' + new ▤ files ± changes menu',
       '',
       ' agents',
       '    ◉ explore',
@@ -597,5 +598,69 @@ describe('pane borders (criterion 8)', () => {
     expect(problems[0]).toMatchObject({ kind: 'bad-value', path: 'ui.pane-borders' })
     expect(problems[0]?.message).toContain('"round"')
     expect(config.ui.paneBorders).toBe(DEFAULT_CONFIG.ui.paneBorders)
+  })
+})
+
+/**
+ * The Changes affordances (phase 13).
+ *
+ * A feature reachable only from `C-b D` is one most people never find, so there are
+ * four clickable ways in. What these pin is the part that breaks silently: a hit span
+ * that does not sit on the glyph it claims is a mis-click, not a visible bug.
+ */
+describe('reaching the Changes overlay with the mouse', () => {
+  it('the `±` glyph is one column wide, like every other glyph in this strip', () => {
+    // `icons.ts` explains the stakes: a glyph the terminal measures differently shifts
+    // every column after it on that row, and takes the hit regions with it.
+    expect(stringWidth('±')).toBe(1)
+  })
+
+  it('draws `± changes` on the action row and registers it as its own target', () => {
+    const drawn = draw(fourAndFour(), { summaries: SUMMARIES })
+    const changes = drawn.hits.actionRow?.changes
+    expect(changes).not.toBeUndefined()
+    expect(changes).not.toBeNull()
+    const row = drawn.rows[drawn.hits.actionRow?.row ?? -1] ?? ''
+    // The span covers the label it says it covers.
+    expect(row.slice(changes?.x ?? 0, changes?.end ?? 0)).toBe('± changes')
+  })
+
+  it('never lets the new button take the word off `files`', () => {
+    // Phase 12 fixed 22 as the width where `▤ files` still reads as a word. A narrow
+    // form of `±` that cost `files` its label would quietly undo that decision.
+    for (const width of [22, 26, 30, 34]) {
+      const drawn = draw(fourAndFour(), { summaries: SUMMARIES, width })
+      const row = drawn.rows[drawn.hits.actionRow?.row ?? -1] ?? ''
+      expect(row).toContain('▤ files')
+    }
+  })
+
+  it('the dirty mark is a target, and only when it was actually drawn', () => {
+    const drawn = draw(fourAndFour(), { summaries: SUMMARIES })
+    // `w1` is the only dirty summary, so there is exactly one span.
+    expect(drawn.hits.dirtySpans).toHaveLength(1)
+    const span = drawn.hits.dirtySpans[0]
+    expect(span?.workspaceId).toBe('w1')
+    const row = drawn.rows[span?.y ?? -1] ?? ''
+    expect(row.slice(span?.x ?? 0, span?.end ?? 0)).toBe('*')
+  })
+
+  it('the agent row reveals `±` on hover and costs nothing when it is not hovered', () => {
+    const cold = draw(fourAndFour(), { summaries: SUMMARIES })
+    expect(cold.hits.agentChangeSpans).toHaveLength(0)
+
+    const agentRow = [...cold.hits.agentRows.keys()].sort((a, b) => a - b)[0] as number
+    const hot = draw(fourAndFour(), { summaries: SUMMARIES, hoverRow: agentRow })
+    expect(hot.hits.agentChangeSpans).toHaveLength(1)
+    const span = hot.hits.agentChangeSpans[0]
+    expect(span?.y).toBe(agentRow)
+    expect((hot.rows[span?.y ?? -1] ?? '').slice(span?.x ?? 0, span?.end ?? 0)).toBe('±')
+  })
+
+  it('falls back to the focused pane when hover is off, rather than vanishing', () => {
+    // The same fallback the pane count and `x` use, and for the same reason: the
+    // button would otherwise be unreachable in the configuration that most needs it.
+    const drawn = draw(fourAndFour(), { summaries: SUMMARIES, hoverEnabled: false })
+    expect(drawn.hits.agentChangeSpans.length).toBeGreaterThan(0)
   })
 })

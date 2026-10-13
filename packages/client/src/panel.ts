@@ -39,9 +39,10 @@
 import { ScreenBuffer, truncate, type Rect } from '@leap-chorus/tui'
 import type { SidebarConfig } from '@leap-chorus/core'
 import type { Palette } from './chrome.js'
-import { EXPLORER_HINT, ExplorerPanel, type ExplorerOutcome } from './explorer.js'
+import { EXPLORER_HINT, type ExplorerOutcome } from './explorer.js'
+import { FileBrowser } from './file-browser.js'
 import { iconTheme, type IconTheme } from './icons.js'
-import { PreviewPanel, type PreviewOutcome } from './preview.js'
+import type { PreviewOutcome } from './preview.js'
 import { MIN_SCM_WIDTH, SCM_HINT, ScmPanel, renderScmPanel, type ScmOutcome } from './scm.js'
 import { SearchPanel, type PanelKey, type SearchOutcome } from './search.js'
 
@@ -50,6 +51,17 @@ export type ViewId = 'explorer' | 'search' | 'scm' | 'preview'
 
 export const VIEW_ORDER: readonly ViewId[] = ['explorer', 'search', 'scm', 'preview']
 
+/**
+ * A chip is not always a view.
+ *
+ * `changes` opens the full-screen Changes overlay instead of switching what the dock is
+ * showing — a diff needs the whole terminal, not thirty-four columns, which is the
+ * decision this whole overlay rests on. It is a chip anyway because the activity bar is
+ * where a reader looks for "what else can this panel do", and a feature reachable only
+ * from `C-b D` is a feature most people never find.
+ */
+export type ChipId = ViewId | 'changes'
+
 /** What the container did, or what the active view asked the app to do. */
 export type PanelOutcome =
   | { readonly view: 'explorer'; readonly outcome: ExplorerOutcome }
@@ -57,26 +69,40 @@ export type PanelOutcome =
   | { readonly view: 'scm'; readonly outcome: ScmOutcome }
   | { readonly view: 'preview'; readonly outcome: PreviewOutcome }
   /** Handled here. `switched` means the app should refresh whatever the new view needs. */
-  | { readonly view: 'panel'; readonly outcome: 'none' | 'close' | 'switched' }
+  | { readonly view: 'panel'; readonly outcome: 'none' | 'close' | 'switched' | 'follow' }
+  /** The `changes` chip: not a view switch, so it does not go through `show`. */
+  | { readonly view: 'changes'; readonly outcome: 'open' }
 
 const NOTHING: PanelOutcome = { view: 'panel', outcome: 'none' }
 
 /** The activity bar's chips, in order. Words rather than icons: they must not shift. */
-const CHIPS: readonly { readonly id: ViewId; readonly label: string }[] = [
+const CHIPS: readonly { readonly id: ChipId; readonly label: string }[] = [
   { id: 'explorer', label: 'files' },
   { id: 'search', label: 'search' },
   { id: 'scm', label: 'git' },
-  { id: 'preview', label: 'view' }
+  { id: 'preview', label: 'view' },
+  // `diff`, not `changes`, and the width is the whole reason: the four chips above
+  // spend 26 of the dock's 34 minimum columns, so `changes` would push the row to 35
+  // and `activityZones` would drop the chip entirely at the default width — a button
+  // that exists only on a widened dock is worse than a shorter word.
+  { id: 'changes', label: 'diff' }
 ]
 
 /**
  * In `unified` layout, `git` is not its own chip — the tree and the changes list share
  * one view, so a chip for the half that is always on screen would switch to nothing.
  */
-const UNIFIED_CHIPS: readonly ViewId[] = ['explorer', 'search', 'preview']
+/**
+ * `git` is not its own chip in `unified`, but `changes` is.
+ *
+ * The exclusion above is about a chip that would switch to a half-view already on
+ * screen. `changes` switches to nothing — it opens an overlay — so the argument does
+ * not reach it.
+ */
+const UNIFIED_CHIPS: readonly ChipId[] = ['explorer', 'search', 'preview', 'changes']
 
 export interface ActivityZone {
-  readonly id: ViewId
+  readonly id: ChipId
   readonly x: number
   /** One past the last column of the chip. */
   readonly end: number
@@ -152,15 +178,18 @@ const READABLE_WIDTH = 80
  * Below this the split costs more than it gives — a tree you were not reading against
  * a file you now cannot. So the tree comes back only when it is effectively free.
  */
-const TREE_BESIDE_PREVIEW_MIN = 72
+const TREE_BESIDE_PREVIEW_MIN = 42
 
 export class SidebarPanels {
-  readonly explorer = new ExplorerPanel()
+  readonly browser = new FileBrowser()
+  readonly explorer = this.browser.explorer
   readonly scm = new ScmPanel()
   readonly search = new SearchPanel()
-  readonly preview = new PreviewPanel()
+  readonly preview = this.browser.preview
 
   private view: ViewId
+  private zoomPreview = false
+  private previewFocus: 'tree' | 'file' = 'file'
   private settings: PanelSettings = DEFAULT_SETTINGS
   private icons: IconTheme = iconTheme('ascii')
   /** In `unified` layout, which of the two stacked lists the keys go to. */
@@ -237,6 +266,7 @@ export class SidebarPanels {
   preferredWidth(cols: number, configured: number): number {
     const normal = Math.min(Math.max(configured, this.minWidth()), Math.max(this.minWidth(), Math.floor(cols / 3)))
     if (this.view !== 'preview') return normal
+    if (this.zoomPreview) return Math.max(normal, cols - 24)
     const ideal = MIN_SCM_WIDTH + 1 + READABLE_WIDTH
     return Math.max(normal, Math.min(Math.floor(cols / 2), ideal))
   }
@@ -251,8 +281,8 @@ export class SidebarPanels {
    * gesture the Explorer's click already produced and had nowhere to put.
    */
   previewAreas(body: Rect): { tree: Rect | null; preview: Rect } {
-    if (body.width < MIN_SCM_WIDTH + 1 + TREE_BESIDE_PREVIEW_MIN) return { tree: null, preview: body }
-    const treeWidth = MIN_SCM_WIDTH
+    const treeWidth = Math.max(20, Math.min(28, Math.floor(body.width / 3)))
+    if (body.width < treeWidth + 1 + TREE_BESIDE_PREVIEW_MIN) return { tree: null, preview: body }
     return {
       tree: { x: body.x, y: body.y, width: treeWidth, height: body.height },
       preview: {
@@ -400,6 +430,21 @@ export class SidebarPanels {
       case 'scm':
         return { view: 'scm', outcome: this.scm.handleKey(key.name, key.char) }
       case 'preview': {
+        if (key.char === 'z' && !key.ctrl && !key.alt) {
+          this.zoomPreview = !this.zoomPreview
+          return NOTHING
+        }
+        if (key.name === 'tab') {
+          if (!this.hasPreviewTree) return this.show('explorer')
+          this.previewFocus = this.previewFocus === 'file' ? 'tree' : 'file'
+          return NOTHING
+        }
+        if (this.previewFocus === 'tree' && this.hasPreviewTree && key.name !== 'escape' && key.char !== 'b') {
+          const result = this.explorerKey(key)
+          return result.view === 'explorer' && result.outcome.kind === 'open'
+            ? { view: 'explorer', outcome: { kind: 'preview', path: result.outcome.path } }
+            : result
+        }
         const outcome = this.preview.handleKey(key, this.lastBody)
         if (outcome.kind === 'close' && this.returnTo !== null) return this.goBack()
         return { view: 'preview', outcome }
@@ -423,7 +468,18 @@ export class SidebarPanels {
    * instead of one.
    */
   private explorerKey(key: PanelKey): PanelOutcome {
-    if (this.settings.layout !== 'unified') {
+    if (!key.ctrl && !key.alt && key.char === 'a' && (this.settings.layout !== 'unified' || this.unifiedFocus === 'tree' || this.view === 'preview')) {
+      this.browser.followActivity = !this.browser.followActivity
+      return NOTHING
+    }
+    if (!key.ctrl && !key.alt && key.char === 'p') {
+      this.browser.pinned = !this.browser.pinned
+      return { view: 'panel', outcome: this.browser.pinned ? 'none' : 'follow' }
+    }
+    const treeFocused = this.settings.layout !== 'unified' || this.unifiedFocus === 'tree' || this.view === 'preview'
+    if (treeFocused && (['up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'enter'].includes(key.name) ||
+        ['h', 'j', 'k', 'l', '.'].includes(key.char ?? ''))) this.browser.followActivity = false
+    if (this.settings.layout !== 'unified' || this.view === 'preview') {
       return { view: 'explorer', outcome: this.explorer.handleKey(key.name, key.char) }
     }
     if (key.name === 'tab') {
@@ -467,6 +523,7 @@ export class SidebarPanels {
    * the render is the only place that knows what the dock actually got.
    */
   private lastBody: Rect = { x: 0, y: 0, width: MIN_SCM_WIDTH, height: 20 }
+  private hasPreviewTree = false
 
   /** A click in the dock. The activity bar is checked first; it sits above every view. */
   handleClick(row: number, column: number, area: Rect): PanelOutcome {
@@ -474,7 +531,9 @@ export class SidebarPanels {
       const zone = activityZones(area, this.settings.layout).find(
         (entry) => column >= entry.x && column < entry.end
       )
-      return zone === undefined ? NOTHING : this.show(zone.id)
+      if (zone === undefined) return NOTHING
+      if (zone.id === 'changes') return { view: 'changes', outcome: 'open' }
+      return this.show(zone.id)
     }
     const body = this.bodyArea(area)
     // A click on the footer is the branch button, the same gesture the Source Control
@@ -489,40 +548,56 @@ export class SidebarPanels {
           const { tree, changes } = this.unifiedAreas(body)
           if (row >= changes.y) {
             this.unifiedFocus = 'changes'
-            return { view: 'scm', outcome: this.scm.handleClick(row, changes) }
+            return { view: 'scm', outcome: this.scm.handleClick(row, changes, column) }
           }
           this.unifiedFocus = 'tree'
+          this.browser.followActivity = false
           return { view: 'explorer', outcome: this.explorer.clickRow(row, tree) }
         }
+        this.browser.followActivity = false
         return { view: 'explorer', outcome: this.explorer.clickRow(row, body) }
       }
       case 'scm':
-        return { view: 'scm', outcome: this.scm.handleClick(row, body) }
+        return { view: 'scm', outcome: this.scm.handleClick(row, body, column) }
       case 'search':
         this.search.clickRow(row, body)
         return NOTHING
       case 'preview': {
         // A click in the tree half previews what it hits, right beside itself.
         const { tree } = this.previewAreas(body)
-        if (tree === null || column >= tree.x + tree.width) return NOTHING
+        if (tree === null || column >= tree.x + tree.width) {
+          this.previewFocus = 'file'
+          return NOTHING
+        }
+        this.previewFocus = 'tree'
+        this.browser.followActivity = false
         return { view: 'explorer', outcome: this.explorer.clickRow(row, tree) }
       }
     }
   }
 
-  scrollBy(delta: number, area: Rect): void {
+  scrollBy(delta: number, area: Rect, column?: number): void {
     const body = this.bodyArea(area)
     if (this.view === 'explorer') {
       if (this.settings.layout === 'unified') {
         const { tree, changes } = this.unifiedAreas(body)
         if (this.unifiedFocus === 'changes') this.scm.scrollBy(delta, changes)
-        else this.explorer.scrollBy(delta, tree)
+        else {
+          this.browser.followActivity = false
+          this.explorer.scrollBy(delta, tree)
+        }
         return
       }
+      this.browser.followActivity = false
       this.explorer.scrollBy(delta, body)
     } else if (this.view === 'scm') this.scm.scrollBy(delta, body)
-    else if (this.view === 'preview') this.preview.scrollBy(delta, body)
-    else this.search.scrollBy(delta, body)
+    else if (this.view === 'preview') {
+      const { tree, preview } = this.previewAreas(body)
+      if (tree !== null && column !== undefined && column < tree.x + tree.width) {
+        this.browser.followActivity = false
+        this.explorer.scrollBy(delta, tree)
+      } else this.preview.scrollBy(delta, preview)
+    } else this.search.scrollBy(delta, body)
   }
 
   // -------------------------------------------------------------------------
@@ -541,9 +616,11 @@ export class SidebarPanels {
     }
 
     const body = this.bodyArea(area)
+    this.explorer.context = `${this.browser.pinned ? 'p pinned' : 'p pin'} · a follow:${this.browser.followActivity ? 'on' : 'off'}`
     // The preview pages and wraps against its *own* rectangle, which is not the body
     // once the tree is beside it.
     this.lastBody = this.view === 'preview' ? this.previewAreas(body).preview : body
+    this.hasPreviewTree = this.view === 'preview' && this.previewAreas(body).tree !== null
     if (this.footerRows() > 0) this.renderFooter(buffer, area, palette)
     if (body.height <= 0) return
     switch (this.view) {
@@ -565,8 +642,11 @@ export class SidebarPanels {
         return
       case 'preview': {
         const { tree, preview } = this.previewAreas(body)
-        if (tree !== null) this.explorer.renderInto(buffer, tree, palette)
-        this.preview.renderInto(buffer, preview, palette, focused)
+        if (tree !== null) {
+          this.explorer.renderInto(buffer, tree, palette)
+          buffer.fill({ x: preview.x - 1, y: body.y, width: 1, height: body.height }, '│', palette.idleBorder)
+        }
+        this.preview.renderInto(buffer, preview, palette, focused && (tree === null || this.previewFocus === 'file'))
         return
       }
     }
@@ -598,8 +678,8 @@ export class SidebarPanels {
   hint(): string {
     if (this.view === 'explorer') {
       return this.settings.layout === 'unified'
-        ? `${this.unifiedFocus === 'changes' ? SCM_HINT : EXPLORER_HINT} · tab other list`
-        : EXPLORER_HINT
+        ? `${this.unifiedFocus === 'changes' ? SCM_HINT : EXPLORER_HINT} · tab other list · p ${this.browser.pinned ? 'unpin' : 'pin'}`
+        : `${EXPLORER_HINT} · p ${this.browser.pinned ? 'unpin' : 'pin'}`
     }
     if (this.view === 'scm') return SCM_HINT
     if (this.view === 'preview') return this.preview.hint()

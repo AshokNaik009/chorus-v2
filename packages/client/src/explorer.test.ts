@@ -15,6 +15,53 @@ const area: Rect = { x: 0, y: 0, width: 34, height: 12 }
 /** The first list row sits two lines below the area's top: the header and the root. */
 const FIRST_ROW = area.y + 2
 
+describe('tree identity', () => {
+  it('keeps a folder collapsed when its first listing arrives late', () => {
+    const tree = new ExplorerPanel()
+    tree.adopt('/repo', '', [{ name: 'src', kind: 'dir', link: false }])
+    tree.activate()
+    tree.handleKey('left', undefined)
+    tree.adopt('/repo', 'src', [{ name: 'a.ts', kind: 'file', link: false }])
+    expect(tree.rows().map((row) => row.node.path)).toEqual(['src'])
+  })
+
+  it('falls back to the parent when the selected file disappears', () => {
+    const tree = new ExplorerPanel()
+    tree.adopt('/repo', '', [{ name: 'src', kind: 'dir', link: false }])
+    tree.adopt('/repo', 'src', ['a.ts', 'b.ts'].map((name) => ({ name, kind: 'file' as const, link: false })))
+    tree.select('src/a.ts')
+    tree.adopt('/repo', 'src', [{ name: 'b.ts', kind: 'file', link: false }])
+    expect(tree.selected()?.path).toBe('src')
+  })
+
+  it('reveals an active hidden path without showing every hidden entry', () => {
+    const tree = new ExplorerPanel()
+    tree.adopt('/repo', '', ['.active', '.other'].map((name) => ({ name, kind: 'file' as const, link: false })))
+    tree.reveal('.active')
+    expect(tree.selected()?.path).toBe('.active')
+    expect(tree.showHidden).toBe(false)
+    expect(tree.rows().map((row) => row.node.path)).toEqual(['.active'])
+  })
+
+  it('drops cached children when the repository changes', () => {
+    const tree = new ExplorerPanel()
+    const dirs = [{ name: 'src', kind: 'dir' as const, link: false }]
+    tree.adopt('/a', '', dirs)
+    tree.adopt('/a', 'src', [{ name: 'only-a.ts', kind: 'file', link: false }])
+    tree.adopt('/b', '', dirs)
+    expect(tree.rows().map((row) => row.node.path)).toEqual(['src'])
+  })
+
+  it('preserves selection by path when rows are inserted above it', () => {
+    const tree = new ExplorerPanel()
+    const file = (name: string) => ({ name, kind: 'file' as const, link: false })
+    tree.adopt('/a', '', [file('b'), file('c')])
+    tree.handleKey('down', undefined)
+    tree.adopt('/a', '', [file('a'), file('b'), file('c')])
+    expect(tree.selected()?.path).toBe('c')
+  })
+})
+
 describe('clicking a row', () => {
   it('expands a folder, which a click used only to highlight', () => {
     // The bug, reported from a screenshot of a tree where every folder sat collapsed:

@@ -115,7 +115,6 @@ import type { PreviewOutcome } from './preview.js'
 import { pagerArgs, type PanelKey, type SearchOutcome } from './search.js'
 import { BRANCH_HINT, BranchPicker, type BranchOutcome } from './branch.js'
 import type {
-  FsListResult,
   GitBranchesResult,
   GitDrawerActionId,
   GitDrawerActionResult,
@@ -123,16 +122,17 @@ import type {
   GitDrawerResult,
   GitDrawerRow,
   GitFirstChangeResult,
+  GitDiffResult,
   GitRepoSummary,
   GitStatusResult,
   GitSummaryResult,
   GitSyncResult,
   GitSuggestResult,
-  PreviewResult,
   SearchContentResult,
   SearchFilesResult,
   WorktreeRemoveResult
 } from '@leap-chorus/protocol'
+import { DIFF_HINT, DiffView, diffArea, type DiffOutcome, type DiffSubject } from './diffview.js'
 import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } from './settings.js'
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
@@ -286,6 +286,24 @@ export class TuiApp {
   /** The settings dialog, or null when it is closed. */
   private settings: SettingsDialog | null = null
   /**
+   * The Changes overlay, or null when it is closed.
+   *
+   * What it is showing is remembered while it is open and thrown away when it closes:
+   * a patch is of a tree an agent is writing to right now, and reopening on a
+   * remembered one would be the one case where showing something stale is worst.
+   */
+  private diff: DiffView | null = null
+  /** The paths the overlay was opened for, so a refresh asks the same question again. */
+  private diffPaths: readonly string[] | null = null
+  /**
+   * The pane the overlay is about, which is **not** always the focused one.
+   *
+   * Clicking `±` on an agent row opens that agent's changes without moving focus — the
+   * whole point of the agents list is reaching something you are not looking at — so a
+   * refresh that asked about the focused pane would quietly answer a different question.
+   */
+  private diffPaneId: string | null = null
+  /**
    * Whether the dock has the keyboard, when it is open at all.
    *
    * It does not always, and that is the whole point of the flag. The dock's job is
@@ -310,6 +328,7 @@ export class TuiApp {
    * between them keeps each one's cursor and scroll; see `panel.ts`.
    */
   private panels: SidebarPanels | null = null
+  private readonly panePanels = new Map<string, SidebarPanels>()
   /** The view the dock was showing when it last closed. See `[sidebar] remember-view`. */
   private lastView: ViewId | null = null
   /**
@@ -414,7 +433,12 @@ export class TuiApp {
   }
 
   private applyConfig(config: Config, problems: readonly ConfigProblem[], errors: readonly string[]): void {
+    const followChanged = this.config.sidebar.followPane !== config.sidebar.followPane
     this.config = config
+    if (followChanged) {
+      for (const panels of this.panePanels.values()) panels.browser.pinned = !config.sidebar.followPane
+      if (config.sidebar.followPane) void this.followBrowserPane()
+    }
     this.keymap = buildKeymap(config)
     this.palette = paletteOf(config)
     this.sidebarMode = config.ui.sidebar ? 'full' : 'hidden'
@@ -464,6 +488,17 @@ export class TuiApp {
     this.ringForAgentChanges(previous, state)
     this.state = state
     void this.refreshRepoSummaries()
+    for (const [id, panels] of this.panePanels) {
+      if (!state.panes.some((pane) => pane.paneId === id)) {
+        panels.browser.dispose()
+        this.panePanels.delete(id)
+        if (this.panels === panels) this.panels = null
+      }
+    }
+    if (previous.focusedPaneId !== state.focusedPaneId && this.panels !== null &&
+        !this.panels.browser.pinned) {
+      void this.followBrowserPane()
+    }
 
     // Retire views for panes that are gone, and make views for panes that are new.
     const live = new Set(state.panes.map((pane) => pane.paneId))
@@ -718,6 +753,11 @@ export class TuiApp {
 
   private handleEvent(event: EventMessage): void {
     switch (event.event) {
+      case 'agent.activity': {
+        if (!this.state.panes.some((pane) => pane.paneId === event.activity.paneId)) return
+        this.browserPanels(event.activity.paneId, 'explorer').browser.noteActivity(event.activity)
+        return
+      }
       case 'session.output': {
         const found = this.viewForSession(event.id)
         if (!found) return
@@ -930,6 +970,12 @@ export class TuiApp {
       await this.applySettingsOutcome(this.settings.handleKey(key.name, key.char))
       return
     }
+    // The Changes overlay is modal over the dock that opened it, and below every
+    // dialog above: a confirm raised *from* the overlay still has to answer first.
+    if (this.diff !== null) {
+      await this.applyDiffOutcome(this.diff.handleKey(key.name, key.char, diffArea(this.cols, this.rows)))
+      return
+    }
     // The panel owns the keyboard while it is open, for the reason scm.ts gives: `d`
     // discards a file here and is an ordinary keystroke to the shell behind it. The
     // prefix still wins, so `C-b` reaches the multiplexer from inside the panel.
@@ -1035,6 +1081,17 @@ export class TuiApp {
         return
       }
       await this.resolveConfirm(this.confirm.handleClick(mouse.column, mouse.row, area))
+      return
+    }
+    if (this.diff !== null) {
+      const area = diffArea(this.cols, this.rows)
+      if (mouse.kind === 'scrollup' || mouse.kind === 'scrolldown') {
+        this.diff.scrollBy(mouse.kind === 'scrollup' ? -3 : 3, area)
+        this.requestRender()
+        return
+      }
+      if (mouse.kind !== 'down') return
+      await this.applyDiffOutcome(this.diff.handleClick(mouse.column, mouse.row, area))
       return
     }
     // The dialog swallows every mouse event while it is open, inside its bounds or
@@ -1642,7 +1699,34 @@ export class TuiApp {
    * repository, with nothing to configure.
    */
   private scmPaneId(): string | null {
-    return this.state.focusedPaneId
+    return this.panels?.browser.paneId ?? this.state.focusedPaneId
+  }
+
+  private browserPanels(paneId: string, view: ViewId): SidebarPanels {
+    let panels = this.panePanels.get(paneId)
+    if (panels === undefined) {
+      panels = new SidebarPanels(view, panelSettings(this.config))
+      panels.browser.pinned = !this.config.sidebar.followPane
+      const instance = panels
+      panels.browser.connect(paneId, this.options.client, () => {
+        if (this.panels === instance) this.requestRender()
+      })
+      this.panePanels.set(paneId, panels)
+    }
+    panels.applySettings(panelSettings(this.config))
+    return panels
+  }
+
+  private async followBrowserPane(): Promise<void> {
+    const paneId = this.state.focusedPaneId
+    if (paneId === null || this.panels === null) return
+    const view = this.panels.active() === 'preview' ? 'explorer' : this.panels.active()
+    this.panels.browser.setVisible(false)
+    const panels = this.browserPanels(paneId, view)
+    this.panels = panels
+    this.requestRender()
+    await panels.browser.refresh()
+    if (this.panels === panels) await this.primeView(panels.active())
   }
 
   /**
@@ -1662,8 +1746,12 @@ export class TuiApp {
       // `C-b g` means Source Control whatever was last on screen — so the remembered
       // view only applies to the generic open.
       const start = this.config.sidebar.rememberView ? (this.lastView ?? view) : view
-      this.panels = new SidebarPanels(start, panelSettings(this.config))
+      const paneId = this.state.focusedPaneId
+      if (paneId === null) return
+      this.panels = this.browserPanels(paneId, start)
+      this.panels.show(start)
       this.requestRender()
+      await this.panels.browser.refresh()
       await this.primeView(start)
       return
     }
@@ -1844,10 +1932,113 @@ export class TuiApp {
     this.requestRender()
   }
 
+  /**
+   * Open the Changes overlay for a pane, and fetch its patch.
+   *
+   * The dock is **not** released: the overlay is drawn over it and closing it puts the
+   * reader back exactly where they were, with the same file under the same cursor. That
+   * is the difference from the old route, which split a pane and changed the layout to
+   * show a diff.
+   */
+  private async openDiff(options: { paneId?: string; paths?: readonly string[]; staged?: boolean } = {}): Promise<void> {
+    const paneId = options.paneId ?? this.state.focusedPaneId
+    if (paneId === null) return
+    const view = this.diff ?? new DiffView()
+    this.diff = view
+    view.staged = options.staged ?? view.staged
+    view.subject = this.diffSubject(paneId)
+    this.diffPaths = options.paths ?? null
+    this.diffPaneId = paneId
+    this.requestRender()
+    await this.fetchDiff(paneId)
+  }
+
+  /** Who the reader is asking about — the half of the header no patch can carry. */
+  private diffSubject(paneId: string): DiffSubject {
+    const pane = paneById(this.state, paneId)
+    const workspace = activeWorkspace(this.state)
+    const summary = workspace === null ? undefined : this.repoSummaries.get(workspace.workspaceId)
+    return {
+      agent: pane?.agent ?? null,
+      agentStatus: pane?.agentStatus ?? null,
+      pane: pane === null ? 'pane' : paneTitle(pane),
+      // The pane is in a checkout the workspace is not. Derived rather than stored:
+      // `git worktree add` in a pane we are showing would make any remembered answer
+      // wrong in the one case it matters.
+      ownWorktree: summary !== undefined && summary.isRepo && pane !== null && !pane.cwd.startsWith(workspace?.cwd ?? '')
+    }
+  }
+
+  private async fetchDiff(paneId: string): Promise<void> {
+    const view = this.diff
+    if (view === null) return
+    try {
+      const result = (await this.options.client.call('git.diff', {
+        paneId,
+        staged: view.staged,
+        ...(this.diffPaths === null ? {} : { paths: this.diffPaths })
+      } as never)) as GitDiffResult
+      if (this.diff === view) view.adopt(result)
+    } catch (error) {
+      if (this.diff === view) view.fail(messageOf(error))
+    }
+    this.requestRender()
+  }
+
+  /** Forget the overlay and everything scoped to it. Three fields, one place. */
+  private closeDiff(): void {
+    this.diff = null
+    this.diffPaths = null
+    this.diffPaneId = null
+  }
+
+  private async applyDiffOutcome(outcome: DiffOutcome): Promise<void> {
+    const view = this.diff
+    if (view === null) return
+    switch (outcome.kind) {
+      case 'none':
+        this.requestRender()
+        return
+      case 'close':
+        this.closeDiff()
+        this.requestRender()
+        return
+      case 'refresh':
+      case 'toggleStaged': {
+        const paneId = this.diffPaneId
+        if (paneId === null) return
+        await this.fetchDiff(paneId)
+        return
+      }
+      case 'edit':
+        await this.openInExternalEditor(outcome.path, view.staged)
+        return
+      case 'pager': {
+        // The route this overlay replaced, kept as a key rather than deleted: `git
+        // diff` in a pane is the user's own pager, already configured, and there are
+        // patches — a forty-file refactor — where that is still the better surface.
+        const args = outcome.staged ? ['diff', '--staged', '--', outcome.path] : ['diff', '--', outcome.path]
+        this.closeDiff()
+        await this.call('pane.split', {
+          direction: 'right',
+          focus: true,
+          command: 'git',
+          args,
+          cwd: view.result?.root ?? ''
+        })
+        return
+      }
+    }
+  }
+
   /** Route whatever the container or the active view decided. */
   private async applyPanelOutcome(result: PanelOutcome): Promise<void> {
     switch (result.view) {
       case 'panel':
+        if (result.outcome === 'follow') {
+          await this.followBrowserPane()
+          return
+        }
         if (result.outcome === 'close') {
           this.closePanels()
           return
@@ -1870,6 +2061,10 @@ export class TuiApp {
       case 'preview':
         await this.applyPreviewOutcome(result.outcome)
         return
+      case 'changes':
+        // Not a view switch, so the dock keeps whatever it was showing behind it.
+        await this.openDiff()
+        return
     }
   }
 
@@ -1888,12 +2083,17 @@ export class TuiApp {
       case 'none':
         this.requestRender()
         return
+      case 'refresh': {
+        const path = panels.preview.path
+        if (path !== null) await panels.browser.read(path, panels.previewWidth(this.sidebarArea() ?? { x: 0, y: 0, width: 80, height: 24 }), true)
+        return
+      }
       case 'close':
         this.closePanels()
         return
       case 'open': {
-        const root = this.searchRoot()
-        if (root === null) return
+        const root = panels.explorer.root
+        if (root === '') return
         await this.openInPager(`${root}/${outcome.path}`, root, null)
         return
       }
@@ -1927,13 +2127,7 @@ export class TuiApp {
       // one whenever the focused pane had `cd`-ed or focus had moved to a pane in
       // another repository — and then the click either failed with "path escapes the
       // root" or, worse, previewed a file of the same name somewhere else entirely.
-      const result = (await this.options.client.call('preview.read', {
-        paneId,
-        path,
-        width,
-        ...(panels.explorer.root === '' ? {} : { root: panels.explorer.root })
-      } as never)) as PreviewResult
-      if (this.panels === panels) panels.preview.adopt(result)
+      await panels.browser.read(path, width)
     } catch (error) {
       if (this.panels === panels) panels.preview.fail(path, messageOf(error))
     }
@@ -2040,23 +2234,18 @@ export class TuiApp {
         this.requestRender()
         return
       }
+      case 'review':
+        await this.openDiff()
+        return
       case 'diff': {
         if (paneId === null) return
-        // Opened in a pane rather than rendered here: `git diff` is already a pager the
-        // user has configured — delta, less, whatever — and reimplementing that badly
-        // in a 34-column panel would help nobody.
-        const args = outcome.staged
-          ? ['diff', '--staged', '--', outcome.path]
-          : ['diff', '--', outcome.path]
-        this.releaseDock()
-        await this.call('pane.split', {
-          direction: 'right',
-          focus: true,
-          command: 'git',
-          args,
-          // The repository root the panel is showing, which is already resolved.
-          cwd: panel.status?.root ?? ''
-        })
+        // Not rendered *in the dock*, which is what three phases refused and were right
+        // to: thirty-four columns cannot hold a diff, and a bad one there would help
+        // nobody. It opens the Changes overlay instead — the whole terminal, over the
+        // dock rather than instead of it, so `esc` puts this cursor back where it was.
+        // `P` in there still spawns `git diff` in a pane for a reader who would rather
+        // have their own pager.
+        await this.openDiff({ paneId, paths: [outcome.path], staged: outcome.staged })
         return
       }
     }
@@ -2111,6 +2300,7 @@ export class TuiApp {
     // Remembered before the container goes, for `[sidebar] remember-view`. Kept even
     // when the setting is off: turning it on should not need a restart to work.
     this.lastView = this.panels?.active() ?? this.lastView
+    this.panels?.browser.setVisible(false)
     this.panels = null
     this.branches = null
     this.setStatus('')
@@ -2211,7 +2401,7 @@ export class TuiApp {
     // than the pager it just opened.
     if (mouse.kind === 'down') this.dockFocused = true
     if (mouse.kind === 'scrollup' || mouse.kind === 'scrolldown') {
-      panels.scrollBy(mouse.kind === 'scrollup' ? -3 : 3, sidebar)
+      panels.scrollBy(mouse.kind === 'scrollup' ? -3 : 3, sidebar, mouse.column)
       this.requestRender()
       return true
     }
@@ -2223,33 +2413,13 @@ export class TuiApp {
   /** Ask the daemon for one directory and hand it to the tree. */
   private async listExplorer(path: string): Promise<void> {
     const panels = this.panels
-    const paneId = this.scmPaneId()
     if (panels === null) return
-    if (paneId === null) {
-      panels.explorer.fail('no focused pane')
-      this.requestRender()
-      return
-    }
-    try {
-      const result = (await this.options.client.call('fs.list', { paneId, path } as never)) as FsListResult
-      if (this.panels === panels) panels.explorer.adopt(result.root, result.path, result.entries)
-    } catch (error) {
-      if (this.panels === panels) panels.explorer.fail(messageOf(error))
-    }
-    this.requestRender()
+    await panels.browser.list(path)
   }
 
   /** Refresh the tree's git decorations. Failure is silent: a tree still lists files. */
   private async refreshExplorerStatus(): Promise<void> {
-    const panels = this.panels
-    const paneId = this.scmPaneId()
-    if (panels === null || paneId === null) return
-    try {
-      panels.explorer.status = (await this.options.client.call('git.status', { paneId } as never)) as GitStatusResult
-    } catch {
-      panels.explorer.status = null
-    }
-    this.requestRender()
+    await this.panels?.browser.status()
   }
 
   private async applyExplorerOutcome(outcome: ExplorerOutcome): Promise<void> {
@@ -2264,8 +2434,7 @@ export class TuiApp {
         this.closePanels()
         return
       case 'refresh':
-        await this.listExplorer('')
-        await this.refreshExplorerStatus()
+        await panels.browser.refresh()
         return
       case 'expand':
         await this.listExplorer(outcome.path)
@@ -2278,7 +2447,7 @@ export class TuiApp {
         // the tree's key hints while the Explorer is open.
         try {
           panel.status = (await this.options.client.call('git.stage', {
-            paneId,
+            cwd: panel.root,
             paths: [outcome.path]
           } as never)) as GitStatusResult
           panel.error = null
@@ -2799,6 +2968,28 @@ export class TuiApp {
         )
         return true
       }
+      // Before the agent row itself, for the same reason the `x` is checked before the
+      // workspace row: the `±` sits on that row, and falling through would focus the
+      // pane instead of showing what it changed.
+      const review = this.hits.agentChangeSpans.find(
+        (entry) => mouse.row === entry.y && mouse.column >= entry.x && mouse.column < entry.end
+      )
+      if (review !== undefined) {
+        await this.openDiff({ paneId: review.paneId })
+        return true
+      }
+      // E2: the `*` that already says there is uncommitted work here. Clicking it asks
+      // the obvious next question, which is *what* is uncommitted.
+      const dirty = this.hits.dirtySpans.find(
+        (entry) => mouse.row === entry.y && mouse.column >= entry.x && mouse.column < entry.end
+      )
+      if (dirty !== undefined) {
+        if (dirty.workspaceId !== this.state.activeWorkspaceId) {
+          await this.call('workspace.focus', { workspaceId: dirty.workspaceId })
+        }
+        await this.openDiff()
+        return true
+      }
       // Clicking an agent jumps to it wherever it is: switch workspace, then focus
       // the pane. That is the whole point of listing agents you cannot currently see.
       const agent = this.hits.agentRows.get(mouse.row)
@@ -2826,14 +3017,18 @@ export class TuiApp {
       }
       const actions = this.hits.actionRow
       if (actions !== null && mouse.row === actions.row) {
-        // Three targets on one row, checked in the order they are drawn: `menu` on the
-        // right, `▤ files` in the middle, and anything else makes a workspace — on a
-        // row labelled `new`, that is the likelier intent for a stray click.
+        // Four targets on one row, checked in the order they are drawn: `menu` on the
+        // right, `▤ files` and `± changes` in the middle, and anything else makes a
+        // workspace — on a row labelled `new`, that is the likelier intent for a stray
+        // click.
         const files = actions.files
+        const changes = actions.changes
+        const hit = (span: { x: number; end: number } | null): boolean =>
+          span !== null && mouse.column >= span.x && mouse.column < span.end
         if (mouse.column >= actions.menuStart) this.openAppMenu(mouse.column, mouse.row)
-        else if (files !== null && mouse.column >= files.x && mouse.column < files.end) {
-          await this.togglePanel('explorer')
-        } else await this.call('workspace.create', { focus: true })
+        else if (hit(files)) await this.togglePanel('explorer')
+        else if (hit(changes)) await this.openDiff()
+        else await this.call('workspace.create', { focus: true })
         return true
       }
       if (mouse.row === this.hits.newWorkspaceRow) {
@@ -3039,6 +3234,16 @@ export class TuiApp {
         await this.togglePanel('scm')
         return
       }
+      case 'client.changes': {
+        // A second press closes it, like every other toggle on the prefix.
+        if (this.diff !== null) {
+          this.closeDiff()
+          this.requestRender()
+          return
+        }
+        await this.openDiff()
+        return
+      }
       case 'client.explorer': {
         await this.togglePanel('explorer')
         return
@@ -3214,6 +3419,8 @@ export class TuiApp {
       const sidebar = this.sidebarArea()
       if (sidebar !== null) {
         if (this.panels !== null) {
+          this.panels.browser.setVisible(true, this.panels.active() === 'preview' ? this.panels.previewWidth(sidebar) : 0)
+          void this.panels.browser.restoreActivity()
           this.panels.render(this.back, sidebar, this.palette, this.dockFocused)
         } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
@@ -3239,6 +3446,21 @@ export class TuiApp {
       }
       const tabBar = this.tabBarArea()
       if (tabBar !== null) renderTabBar(this.back, tabBar, this.state, this.palette, this.hits)
+      // The Changes overlay draws over the panes and the dock, and under every dialog:
+      // a confirm or a prompt raised from it has to be readable on top of it.
+      if (this.diff !== null) {
+        const area = diffArea(this.cols, this.rows)
+        renderBlock(this.back, area, {
+          borders: BORDER_ALL,
+          chars: this.borderChars(),
+          borderStyle: this.palette.focusBorder
+        })
+        this.diff.render(
+          this.back,
+          { x: area.x + 1, y: area.y + 1, width: area.width - 2, height: area.height - 2 },
+          this.palette
+        )
+      }
       // The dialog draws last, over everything: that is what makes it modal on a
       // screen that has no z-order of its own.
       if (this.settings !== null) {
@@ -3378,8 +3600,12 @@ export class TuiApp {
       ? 'PREFIX'
       : this.branches !== null
         ? BRANCH_HINT
-        : this.panels !== null && this.dockFocused
-          ? this.panels.hint()
+        : // Above the dock's hint, because the overlay is above the dock: while it is
+          // open its keys are the ones that work, and the dock's would be a lie.
+          this.diff !== null
+          ? DIFF_HINT
+          : this.panels !== null && this.dockFocused
+            ? this.panels.hint()
       : this.status.length > 0
         ? this.status
         : `${describeChord(this.config.keys.prefix)} ? · menu for keys`
@@ -3445,6 +3671,8 @@ export class TuiApp {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    for (const panels of this.panePanels.values()) panels.browser.dispose()
+    this.panePanels.clear()
     if (this.renderScheduled) clearTimeout(this.renderScheduled)
     this.renderScheduled = null
     if (this.idleTimer) clearTimeout(this.idleTimer)

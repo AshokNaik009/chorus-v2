@@ -8,6 +8,9 @@
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { spawn } from 'node:child_process'
+import type { AgentFileActivity } from '@leap-chorus/protocol'
+import { assetFor } from '../src/integration/assets.js'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AGENT_METHODS, ErrorCodes, type SessionStateSnapshot } from '@leap-chorus/protocol'
@@ -80,6 +83,89 @@ describe('routing', () => {
 })
 
 describe('agent.report', () => {
+  it('retains at most 64 events per pane for a newly attached client', async () => {
+    const paneId = await firstPaneId()
+    for (let seq = 1; seq <= 70; seq++) {
+      await client.call('agent.report', { paneId, agent: 'claude', source: 'test', state: 'working', seq,
+        activity: { kind: 'read', cwd: '/repo', path: `file-${seq}.ts` } })
+    }
+    const { client: watcher } = await connectTo(server.paths, 'activity-reconnect')
+    try {
+      const { events } = await watcher.call('agent.activity', { paneId })
+      expect(events).toHaveLength(64)
+      expect(events[0]?.seq).toBe(7)
+      expect(events.at(-1)?.seq).toBe(70)
+      await expect(watcher.call('agent.activity', { paneId: 'gone' })).rejects.toThrow()
+    } finally {
+      watcher.close()
+    }
+  })
+
+  it.each(['not json', '[]', JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash', cwd: '/repo' })])(
+    'keeps the hook successful with a missing daemon and input %s', async (input) => {
+      const dir = tempDataRoot()
+      const hook = join(dir, 'hook.sh')
+      writeFileSync(hook, assetFor('claude')!.contents)
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn('/bin/sh', [hook, 'working'], {
+          env: { ...process.env, LEAP_CHORUS_PANE_ID: 'pane', LEAP_CHORUS_SOCKET_PATH: join(dir, 'missing.sock') },
+          stdio: ['pipe', 'pipe', 'pipe']
+        })
+        child.on('error', reject)
+        child.on('close', resolve)
+        child.stdin.end(input)
+      })
+      expect(code).toBe(0)
+    }
+  )
+
+  it('broadcasts file metadata only for an accepted report', async () => {
+    const paneId = await firstPaneId()
+    const events: AgentFileActivity[] = []
+    const off = client.onEvent((event) => { if (event.event === 'agent.activity') events.push(event.activity) })
+    const report = { paneId, source: 'leap-chorus:claude', agent: 'claude', state: 'working' as const, seq: 20,
+      activity: { kind: 'write' as const, cwd: '/repo', path: 'src/a.ts' } }
+    await client.call('agent.report', report)
+    await client.call('agent.report', { ...report, seq: 10 })
+    await waitUntil(() => events.length > 0, 'file activity never arrived')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ paneId, kind: 'write', path: '/repo/src/a.ts' })
+    off()
+  })
+
+  it('runs the opt-in Claude hook without sending file contents', async () => {
+    const paneId = await firstPaneId()
+    const events: AgentFileActivity[] = []
+    const off = client.onEvent((event) => { if (event.event === 'agent.activity') events.push(event.activity) })
+    const dir = tempDataRoot()
+    const hook = join(dir, 'hook.sh')
+    writeFileSync(hook, assetFor('claude')!.contents)
+    const code = await new Promise<number | null>((resolve, reject) => {
+      const child = spawn('/bin/sh', [hook, 'working'], {
+        env: { ...process.env, LEAP_CHORUS_PANE_ID: paneId, LEAP_CHORUS_SOCKET_PATH: server.paths.socketPath },
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      let stderr = ''
+      let inputError: Error | null = null
+      child.stderr.on('data', (data) => { stderr += String(data) })
+      child.stdin.on('error', (error) => { inputError = error })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (stderr || inputError) reject(new Error(stderr || String(inputError)))
+        else resolve(code)
+      })
+      child.stdin.end(JSON.stringify({
+        hook_event_name: 'PostToolUse', tool_name: 'Write', cwd: dir,
+        tool_input: { file_path: join(dir, 'a.ts'), content: 'do-not-transmit-this-content'.repeat(20_000) }
+      }))
+    })
+    expect(code).toBe(0)
+    await waitUntil(() => events.length > 0, 'the installed hook did not report a file')
+    expect(events[0]).toMatchObject({ paneId, kind: 'write', path: join(dir, 'a.ts') })
+    expect(JSON.stringify(events)).not.toContain('do-not-transmit-this-content')
+    off()
+  })
+
   it('puts a hook state on the pane, and on the wire', async () => {
     const paneId = await firstPaneId()
     const result = await client.call('agent.report', {

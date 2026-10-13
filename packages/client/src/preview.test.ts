@@ -46,6 +46,27 @@ const palette = {
 } as unknown as Palette
 
 describe('taking a result', () => {
+  it('distinguishes repeated requests for the same path', () => {
+    const panel = new PreviewPanel()
+    const old = panel.request('a.ts')
+    const current = panel.request('a.ts')
+    panel.adopt(result({ path: 'a.ts', lines: ['old'] }), old)
+    expect(panel.result).toBeNull()
+    panel.adopt(result({ path: 'a.ts', lines: ['new'] }), current)
+    expect(panel.result?.lines).toEqual(['new'])
+  })
+
+  it('rejects a late reply even after the newest request has completed', () => {
+    const panel = new PreviewPanel()
+    panel.request('a.ts')
+    panel.request('b.ts')
+    panel.adopt(result({ path: 'b.ts' }))
+    panel.adopt(result({ path: 'a.ts' }))
+    panel.fail('a.ts', 'late failure')
+    expect(panel.result?.path).toBe('b.ts')
+    expect(panel.error).toBeNull()
+  })
+
   it('shows the lines it was given', () => {
     const panel = new PreviewPanel()
     panel.request('src/app.ts')
@@ -159,7 +180,7 @@ describe('wrapping', () => {
     // Wrapped, there is nothing to the right, so the key does nothing rather than
     // silently moving something invisible.
     panel.handleKey(key('right'), area)
-    expect(panel.rowsShown(area)[0]).toBe('x'.repeat(34))
+    expect(panel.rowsShown(area)[0]).toBe('x'.repeat(31))
   })
 })
 
@@ -209,6 +230,16 @@ describe('saying what it is not showing', () => {
 })
 
 describe('what the preview can ask for', () => {
+  it('retains the requested path so refresh can retry a failed read', () => {
+    const panel = new PreviewPanel()
+    panel.request('missing.ts')
+    panel.fail('missing.ts', 'file not found')
+    expect(panel.path).toBe('missing.ts')
+    expect(panel.handleKey(key('char', 'r'), area)).toEqual({ kind: 'refresh' })
+    panel.reset()
+    expect(panel.path).toBeNull()
+  })
+
   it('enter hands the file to $PAGER — reading still happens in a pane', () => {
     const panel = new PreviewPanel()
     panel.request('src/app.ts')
@@ -223,6 +254,34 @@ describe('what the preview can ask for', () => {
 })
 
 describe('the container routes the preview', () => {
+  it('keeps a useful tree beside a preview at 160 columns and offers zoom', () => {
+    const panels = new SidebarPanels('preview')
+    const width = panels.preferredWidth(160, 30)
+    const parts = panels.previewAreas({ ...area, width })
+    expect(parts.tree?.width).toBeGreaterThanOrEqual(20)
+    expect(parts.preview.width).toBeGreaterThanOrEqual(42)
+    panels.handleKey(key('char', 'z'))
+    expect(panels.preferredWidth(160, 30)).toBe(136)
+  })
+
+  it('pins and unpins the browser without changing the selected file', () => {
+    const panels = new SidebarPanels('explorer')
+    panels.explorer.adopt('/repo', '', [{ name: 'a.ts', kind: 'file', link: false }])
+    panels.handleKey(key('char', 'p'))
+    expect(panels.browser.pinned).toBe(true)
+    expect(panels.handleKey(key('char', 'p'))).toEqual({ view: 'panel', outcome: 'follow' })
+    expect(panels.explorer.selected()?.path).toBe('a.ts')
+  })
+
+  it('renders line numbers next to source text', () => {
+    const panel = new PreviewPanel()
+    panel.request('a.ts')
+    panel.adopt(result({ path: 'a.ts', lines: ['const x = 1', ''] }))
+    const buffer = new ScreenBuffer(area.width, area.height)
+    panel.renderInto(buffer, area, palette, true)
+    expect(renderToText(buffer, area)).toContain('1  const x = 1')
+  })
+
   it('escape from a preview opened over the tree goes back to the tree', () => {
     const panels = new SidebarPanels('explorer')
     panels.showPreview('src/app.ts')

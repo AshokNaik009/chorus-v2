@@ -25,10 +25,12 @@ import type { PreviewResult } from '@leap-chorus/protocol'
 import { wrapWords, type Palette } from './chrome.js'
 import { ScrollView, needsScrollbar, renderScrollbar } from './scrollview.js'
 import type { PanelKey } from './search.js'
+import { CodeDocument, drawCodeRow } from './code-document.js'
 
 export type PreviewOutcome =
   | { readonly kind: 'none' }
   | { readonly kind: 'close' }
+  | { readonly kind: 'refresh' }
   /** Hand this file to `$PAGER` in a pane, which is where reading belongs. */
   | { readonly kind: 'open'; readonly path: string }
 
@@ -37,6 +39,7 @@ const LIST_TOP = 2
 
 export class PreviewPanel {
   result: PreviewResult | null = null
+  path: string | null = null
   error: string | null = null
   /** The path we asked for, so a reply for a file the cursor has left is discarded. */
   pending: string | null = null
@@ -51,46 +54,73 @@ export class PreviewPanel {
   /** Horizontal scroll, in columns. Only reachable while `wrap` is off. */
   private column = 0
   private readonly view = new ScrollView()
+  private generation = 0
+  private preservePosition = false
+  private documentCache: { result: PreviewResult | null; document: CodeDocument } | null = null
 
-  adopt(result: PreviewResult): void {
-    // A reply for a file the cursor has already left is not an answer to any question
-    // that is still being asked. Dropping it is what stops a fast cursor from leaving
-    // the wrong file on screen.
-    if (this.pending !== null && result.path !== this.pending) return
-    this.result = result
+  private document(): CodeDocument {
+    if (this.documentCache?.result === this.result) return this.documentCache.document
+    const document = new CodeDocument(this.result?.path ?? '', this.result?.lines ?? [], this.result?.renderer === 'plain')
+    this.documentCache = { result: this.result, document }
+    return document
+  }
+
+  reset(): void {
+    this.path = null
+    this.generation += 1
+    this.result = null
     this.pending = null
     this.error = null
     this.view.offset = 0
     this.column = 0
   }
 
-  fail(path: string, message: string): void {
-    if (this.pending !== null && path !== this.pending) return
+  adopt(result: PreviewResult, generation = this.generation): void {
+    // A reply for a file the cursor has already left is not an answer to any question
+    // that is still being asked. Dropping it is what stops a fast cursor from leaving
+    // the wrong file on screen.
+    if (generation !== this.generation || result.path !== this.pending) return
+    this.result = result
+    this.pending = null
+    this.error = null
+    if (!this.preservePosition) {
+      this.view.offset = 0
+      this.column = 0
+    }
+  }
+
+  fail(path: string, message: string, generation = this.generation): void {
+    if (generation !== this.generation || path !== this.pending) return
     this.result = null
     this.pending = null
     this.error = message
   }
 
   /** Say what is being fetched, so the panel can show the name before the bytes land. */
-  request(path: string): void {
+  request(path: string, preservePosition = false): number {
+    this.path = path
+    this.preservePosition = preservePosition && this.result?.path === path
+    if (this.result?.path !== path) this.result = null
     this.pending = path
     this.error = null
+    return ++this.generation
   }
 
   /** The lines as they will be drawn, wrapped when asked. */
   rows(width: number): string[] {
     const result = this.result
     if (result === null) return []
-    if (!this.wrap) return [...result.lines]
+    if (!this.wrap) return this.document().rows(width, false).map((row) => row.spans.map((span) => span.text).join(''))
     const out: string[] = []
-    for (const line of result.lines) {
+    for (const row of this.document().rows(width, true)) {
+      const line = row.spans.map((span) => span.text).join('')
       // An empty line is a paragraph break and has to survive wrapping, which
       // `wrapWords` of '' would otherwise drop.
       if (line.length === 0) {
         out.push('')
         continue
       }
-      out.push(...wrapWords(line, Math.max(1, width)))
+      out.push(line)
     }
     return out
   }
@@ -122,7 +152,8 @@ export class PreviewPanel {
     const width = this.textWidth(area)
     const count = this.rows(width).length
 
-    if (key.name === 'escape' || key.char === 'q') return { kind: 'close' }
+    if (key.name === 'escape' || key.char === 'q' || key.char === 'b') return { kind: 'close' }
+    if (key.char === 'r') return { kind: 'refresh' }
     if (key.char === 'w') {
       this.wrap = !this.wrap
       // The offset was an index into the *unwrapped* list and means something else now.
@@ -182,14 +213,20 @@ export class PreviewPanel {
     return Math.max(0, area.height - LIST_TOP)
   }
 
+  private gutterWidth(area: Rect): number {
+    return this.result?.renderer === 'plain' && area.width >= 12 ? String(this.result.lines.length).length + 2 : 0
+  }
+
   private textWidth(area: Rect): number {
-    return Math.max(1, area.width)
+    const width = Math.max(1, area.width - this.gutterWidth(area))
+    const bar = this.document().rows(width, this.wrap).length > this.listHeight(area)
+    return Math.max(1, width - (bar ? 1 : 0))
   }
 
   /** How far right there is anything to see. Past this, scrolling shows blank columns. */
   private maxColumn(width: number): number {
     let longest = 0
-    for (const line of this.result?.lines ?? []) longest = Math.max(longest, stringWidth(line))
+    for (const spans of this.document().lines) longest = Math.max(longest, stringWidth(spans.map((span) => span.text).join('')))
     return Math.max(0, longest - width)
   }
 
@@ -208,6 +245,7 @@ export class PreviewPanel {
     if (result.binary) return `binary · ${formatSize(result.size)}`
     const parts = [`${result.lines.length} lines`, formatSize(result.size)]
     if (result.renderer !== 'plain') parts.push(result.renderer)
+    if (this.document().highlighted) parts.push('syntax')
     if (result.cap !== null) parts.push(result.cap === 'lines' ? 'more lines' : 'more bytes')
     if (this.wrap) parts.push('wrap')
     return parts.join(' · ')
@@ -217,7 +255,7 @@ export class PreviewPanel {
     buffer.fill(area, ' ', palette.sidebar)
     const right = area.x + area.width
     const dim = palette.agent['idle'] ?? palette.sidebar
-    const name = this.result?.path ?? this.pending ?? 'preview'
+    const name = this.path ?? 'preview'
 
     buffer.writeString(
       area.x,
@@ -271,8 +309,13 @@ export class PreviewPanel {
     const room = area.width - (bar ? 1 : 0)
     const offset = this.view.clamp(rows.length, height)
     let y = area.y + LIST_TOP
-    for (const line of this.rowsShown(area)) {
-      buffer.writeString(area.x, y, truncate(line, room), palette.sidebar, area.x + room)
+    const gutter = this.gutterWidth(area)
+    for (const row of this.document().rows(width, this.wrap).slice(offset, offset + height)) {
+      if (gutter > 0) {
+        const number = row.continuation ? '' : String(row.line)
+        buffer.writeString(area.x, y, number.padStart(gutter - 2) + '  ', dim, area.x + gutter)
+      }
+      drawCodeRow(buffer, area.x + gutter, y, room - gutter, row, this.wrap ? 0 : this.column, palette)
       y += 1
     }
     if (bar) {
@@ -301,9 +344,13 @@ export class PreviewPanel {
 export function sliceColumns(text: string, columns: number): string {
   if (columns <= 0) return text
   let used = 0
-  for (let i = 0; i < text.length; i++) {
-    if (used >= columns) return text.slice(i)
-    used += stringWidth(text[i] as string)
+  let index = 0
+  for (const char of text) {
+    if (used >= columns) return text.slice(index)
+    const size = stringWidth(char)
+    if (used + size > columns) return ' '.repeat(used + size - columns) + text.slice(index + char.length)
+    used += size
+    index += char.length
   }
   return ''
 }
@@ -315,11 +362,16 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** `…/deep/file.ts` says more than `packages/client/sr…`. */
-function tail(path: string, width: number): string {
+/**
+ * `…/deep/file.ts` says more than `packages/client/sr…`.
+ *
+ * Exported for the Changes overlay's file index, which elides the same paths in the
+ * same narrow column and should not get a fourth private copy of four lines.
+ */
+export function tail(path: string, width: number): string {
   if (width <= 0) return ''
   return path.length <= width ? path : `…${path.slice(path.length - width + 1)}`
 }
 
 export const PREVIEW_HINT =
-  '↑↓ scroll · PgUp/PgDn page · w wrap · ←→ pan · ⏎ open in $PAGER · esc back'
+  '↑↓ scroll · tab tree · z zoom · w wrap · ←→ pan · r refresh · ⏎ $PAGER · b/esc back'

@@ -11,7 +11,7 @@
 import type { PreviewResult } from '@leap-chorus/protocol'
 import type { PreviewService } from '../preview.js'
 import { resolveRoot, type GitContext } from './git.js'
-import { optionalNumber, optionalString, requireString, type Params } from './params.js'
+import { optionalBoolean, optionalNumber, optionalString, requireString, type Params } from './params.js'
 
 export interface PreviewContext extends GitContext {
   readonly preview: PreviewService
@@ -37,6 +37,6 @@ export async function previewRead(context: PreviewContext, params: Params): Prom
   const width = optionalNumber(params, 'width') ?? DEFAULT_WIDTH
   // `bytesRead` exists for tests and is stripped here rather than at the call site, so
   // it cannot reach the wire by somebody forgetting.
-  const { bytesRead: _ignored, ...result } = await context.preview.read(root, path, width)
+  const { bytesRead: _ignored, ...result } = await context.preview.read(root, path, width, optionalBoolean(params, 'raw') ?? false)
   return result
 }

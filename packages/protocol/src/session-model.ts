@@ -369,7 +369,21 @@ export interface ConfigGetResult {
  * lived, so two can land out of order; the daemon drops a report older than the one it
  * has rather than letting a late `working` overwrite a current `idle`.
  */
+export interface AgentActivityInput {
+  readonly kind: 'read' | 'write' | 'refresh'
+  readonly cwd: string
+  readonly path?: string
+}
+
+export interface AgentFileActivity extends AgentActivityInput {
+  readonly paneId: string
+  readonly agent: string
+  readonly seq: number
+  readonly at: number
+}
+
 export interface AgentReportParams {
+  readonly activity?: AgentActivityInput
   readonly paneId: string
   /** Which integration is speaking, e.g. `leap-chorus:claude`. */
   readonly source: string
@@ -611,6 +625,108 @@ export interface GitSummaryResult {
   readonly summaries: readonly GitRepoSummary[]
 }
 
+
+// ---------------------------------------------------------------------------
+// The Changes overlay (PHASE-13)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a line does to the file.
+ *
+ * Three kinds, not four: a `\ No newline at end of file` marker is attached to the
+ * line above it rather than becoming one, because it is a fact *about* that line and a
+ * renderer that made it a row would have to give it a line number it does not have.
+ */
+export type DiffLineKind = 'add' | 'del' | 'ctx'
+
+/**
+ * One line of a hunk, carrying the numbers a renderer cannot recompute.
+ *
+ * `old` and `new` are the real line numbers in the two versions of the file, resolved
+ * here because only the parser knows them: they come from the `@@` header's start
+ * plus a running count that advances differently per kind. A client handed only the
+ * text would have to redo exactly that work, and PHASE-11's rule — rows arrive
+ * structured and are never re-derived from display text — exists to stop it.
+ *
+ * `text` has no `+`/`-`/space prefix. The kind carries that, and leaving the marker in
+ * would mean every consumer slicing a column off before it could measure the line.
+ */
+export interface DiffLine {
+  readonly kind: DiffLineKind
+  /** The line number in the old file; null on an addition. */
+  readonly old: number | null
+  /** The line number in the new file; null on a deletion. */
+  readonly new: number | null
+  readonly text: string
+  /** The line was the last in its file and had no trailing newline. */
+  readonly noNewline?: boolean
+}
+
+export interface DiffHunk {
+  /** git's own `@@ -a,b +c,d @@` text, drawn verbatim as the separator row. */
+  readonly header: string
+  /** The function-context suffix git appends to the header. Empty when absent. */
+  readonly section: string
+  readonly oldStart: number
+  readonly oldCount: number
+  readonly newStart: number
+  readonly newCount: number
+  readonly lines: readonly DiffLine[]
+}
+
+/**
+ * One file's changes.
+ *
+ * `letter` is `GitFileEntry`'s alphabet rather than a second one, so the overlay's
+ * header and the Source Control list cannot disagree about what happened to a file.
+ */
+export interface DiffFile {
+  /** Repo-relative, as git prints it. */
+  readonly path: string
+  /** The rename or copy source, when there is one. */
+  readonly origin: string | null
+  /** `M`, `A`, `D`, `R`, `C`, or `U` for untracked — `GitFileEntry`'s alphabet. */
+  readonly letter: string
+  readonly staged: boolean
+  /**
+   * git said `Binary files … differ` and emitted no hunks.
+   *
+   * Said structurally rather than passed through as text: a terminal handed arbitrary
+   * bytes does arbitrary things to its own state, which is the same argument
+   * `PreviewResult.binary` already makes.
+   */
+  readonly binary: boolean
+  /** The file tripped the per-file line cap; what is here is a prefix. */
+  readonly truncated: boolean
+  readonly added: number
+  readonly removed: number
+  readonly hunks: readonly DiffHunk[]
+}
+
+export interface GitDiffParams extends GitTargetParams {
+  /** Repo-relative paths. Absent or empty means every changed file. */
+  readonly paths?: readonly string[]
+  /** Diff the index against HEAD instead of the working tree against the index. */
+  readonly staged?: boolean
+  /** Context lines per hunk. Absent is `DIFF_CONTEXT`. */
+  readonly context?: number
+}
+
+export interface GitDiffResult {
+  readonly root: string
+  readonly branch: string
+  readonly files: readonly DiffFile[]
+  /**
+   * What was not shown, and why.
+   *
+   * Never silence: a diff that hit the runner's buffer cap comes back as a non-zero
+   * code with empty stderr and a partial stdout, which is indistinguishable at the
+   * call site from a git that failed quietly. `GitResult.overflowed` exists to tell
+   * them apart and this is where the answer surfaces.
+   */
+  readonly note: string | null
+}
+
 // ---------------------------------------------------------------------------
 // The Source Control drawers (PHASE-11)
 // ---------------------------------------------------------------------------
@@ -784,6 +900,7 @@ export interface FsEntry {
 }
 
 export interface FsListParams extends GitTargetParams {
+  readonly root?: string
   /** Directory to list, relative to the resolved root. `''` or absent is the root. */
   readonly path?: string
 }
@@ -1006,6 +1123,7 @@ export type PreviewRenderer = 'plain' | 'bat' | 'glow' | 'delta'
 export type PreviewCap = 'bytes' | 'lines'
 
 export interface PreviewReadParams extends GitTargetParams {
+  readonly raw?: boolean
   /** Root-relative, `/`-separated — the same path the explorer and search hand around. */
   readonly path: string
   /** The dock's width, so a renderer that reflows reflows to the right number. */

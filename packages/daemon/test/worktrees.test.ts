@@ -361,6 +361,22 @@ describe('integrations', () => {
     expect(stopCommands.some((command) => command?.includes('leap-chorus-agent-state.sh'))).toBe(true)
   })
 
+  it('preserves user hooks sharing a matcher with an old Chorus hook', () => {
+    const settingsPath = join(home, '.claude/settings.json')
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    const custom = { type: 'command', command: '/usr/local/bin/my-own-hook' }
+    writeFileSync(settingsPath, JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Write', hooks: [
+      { type: 'command', command: hookCommand('/old/leap-chorus-agent-state.sh', 'working') }, custom
+    ] }] } }))
+    installIntegrations(options(), { agents: ['claude'] })
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+    expect(settings.hooks.PostToolUse).toContainEqual({ matcher: 'Write', hooks: [custom] })
+    expect(JSON.stringify(settings)).not.toContain('/old/')
+    const once = readFileSync(settingsPath, 'utf8')
+    installIntegrations(options(), { agents: ['claude'] })
+    expect(readFileSync(settingsPath, 'utf8')).toBe(once)
+  })
+
   it('replaces its own entry from a previous install at another path', () => {
     const settingsPath = join(home, '.claude/settings.json')
     installIntegrations(options(), { agents: ['claude'] })

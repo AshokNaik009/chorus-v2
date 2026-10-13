@@ -107,6 +107,7 @@ The prefix is `Ctrl-B`, as in tmux. Every binding is configurable.
 | `C-b ?` | settings |
 | `C-b s` | show or hide the sidebar |
 | `C-b e` / `C-b f` / `C-b g` | the docked panel: files, search, source control |
+| `C-b D` | review what changed in this pane — the Changes overlay |
 | `C-b PgUp` / `PgDn` / `End` | scroll this pane's history |
 | `C-b r` / `C-b R` | force a repaint / reload the config |
 | `C-b d` | detach — the daemon and every pane keep running |
@@ -200,7 +201,7 @@ nobody.
 | `a` / `u` | stage everything / unstage everything |
 | `c` | commit what is staged |
 | `d` | discard the file under the cursor (asks first) |
-| `o` | open its diff in a new pane |
+| `o` | review its diff in the Changes overlay |
 | `b` | switch branch |
 | `S` | sync: pull --rebase --autostash, then push |
 | `r` | refresh |
@@ -212,8 +213,59 @@ the multiplexer from inside.
 
 Discard distinguishes the two cases it covers, because only one is recoverable: a
 tracked file is restored from the index, an untracked one is deleted. The
-confirmation says which. Diffs open in a pane running `git diff`, so they go through
-whatever pager you already configured — delta, less, anything.
+confirmation says which.
+
+## Changes: what the agents actually did
+
+The sidebar says *which* agent needs you. `Ctrl-B D` says **what it changed** — a
+full-screen review of the working tree against `HEAD`, for the focused pane's
+repository, headed by the agent running there:
+
+```
+Changes — claude · working · pane 2 · feat/parser · 3 files  +87 −21   [worktree]
+ Changes (3)                 ▸M  src/parser.ts                              +12 −3
+ M src/parser.ts             @@ -1,9 +1,14 @@
+ M src/options.ts              1      -export function parse(input: string) {
+ U src/tokens.ts                    1 +export function parse(input: string, o: Options = {}) {
+                               2    2    const tokens: Token[] = []
+```
+
+`[worktree]` appears when that pane has a checkout of its own, which is the usual
+shape once two agents are running.
+
+Down the left is the **file index** — every file in the patch, always visible, so a
+twenty-file change has a shape instead of being a page at a time. Click a row and the
+patch jumps to that file. It gives way automatically on a terminal too narrow to hold
+both columns, and `i` hides it when you would rather have the width.
+
+| Key | Action |
+|---|---|
+| `↑↓` / `j k` / `PgUp` `PgDn` | scroll the patch |
+| `]` / `[` | next / previous file — the `▸` marks which one, in both columns |
+| click a file | jump the patch to it |
+| `i` | show or hide the file index |
+| `t` | side-by-side, when the terminal is wide enough |
+| `w` | wrap long lines; `←→` pans instead when it is off |
+| `s` | show the staged side instead of the working tree |
+| `e` | open the current file in your editor, at its first change |
+| `P` | fall back to `git diff` in a pane, in your own pager |
+| `r` | refresh |
+| `Esc` / `q` | close |
+
+It draws **over** the dock rather than instead of it, so closing puts you back on the
+file you were on. Untracked files are included — `git diff` omits them, so they are
+fetched separately; without that the most interesting thing an agent does, writing a
+new file, would be invisible. Binary files say so rather than painting their bytes.
+
+Four ways in besides the key, because a feature reachable only from a chord is one
+most people never find: the `± changes` button on the sidebar's action row, the `*`
+on a dirty workspace's branch line, a `±` that appears when you hover an agent, and
+the `changes` chip in the docked panel's activity bar.
+
+Colours come from your theme's green and red — the same two the agent states use — so
+there is nothing new to configure. The patch is parsed in the daemon and painted here
+rather than piped through `delta`: the dock paints its own styles and cannot consume
+ANSI, which is the same reason `bat` runs with colour off.
 
 ## Controlling panes from a script
 

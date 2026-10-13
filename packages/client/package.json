@@ -20,7 +20,8 @@
     "@leap-chorus/daemon": "workspace:*",
     "@leap-chorus/input": "workspace:*",
     "@leap-chorus/protocol": "workspace:*",
-    "@leap-chorus/tui": "workspace:*"
+    "@leap-chorus/tui": "workspace:*",
+    "lowlight": "3.3.0"
   },
   "devDependencies": {
     "node-pty": "1.1.0"

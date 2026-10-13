@@ -24,7 +24,7 @@
  */
 
 /** Bump once per release in which any asset below changed. See the note above. */
-export const INTEGRATION_ASSET_VERSION = 1
+export const INTEGRATION_ASSET_VERSION = 2
 
 export interface IntegrationAsset {
   readonly agent: string
@@ -64,9 +64,7 @@ action="\${1:-}"
 command -v python3 >/dev/null 2>&1 || exit 0
 
 # The agent writes its event payload on stdin. Read it before anything can block.
-hook_input="$(cat 2>/dev/null || true)"
-
-LEAP_CHORUS_ACTION="$action" LEAP_CHORUS_AGENT="${agent}" LEAP_CHORUS_HOOK_INPUT="$hook_input" python3 - <<'PY'
+LEAP_CHORUS_ACTION="$action" LEAP_CHORUS_AGENT="${agent}" python3 -c "$(cat <<'PY'
 import json
 import os
 import socket
@@ -92,8 +90,12 @@ state = STATES[action]
 
 payload = {}
 try:
-    raw = os.environ.get("LEAP_CHORUS_HOOK_INPUT") or ""
-    if raw.strip():
+    limit = 8 * 1024 * 1024
+    raw = sys.stdin.read(limit + 1)
+    if len(raw) > limit:
+        for chunk in iter(lambda: sys.stdin.read(65536), ""):
+            pass
+    elif raw.strip():
         payload = json.loads(raw)
 except Exception:
     payload = {}
@@ -114,6 +116,23 @@ if state is not None:
 if isinstance(session_id, str) and session_id:
     params["agentSessionId"] = session_id
 
+cwd = payload.get("cwd")
+event = payload.get("hook_event_name")
+tool = payload.get("tool_name")
+inputs = payload.get("tool_input")
+if not isinstance(inputs, dict):
+    inputs = {}
+if agent == "claude" and isinstance(cwd, str) and os.path.isabs(cwd):
+    activity = None
+    if event == "PostToolUse" and tool in ("Read", "Edit", "Write", "NotebookEdit"):
+        path = inputs.get("file_path") or inputs.get("notebook_path")
+        if isinstance(path, str) and path and len(path) <= 4096:
+            activity = {"kind": "read" if tool == "Read" else "write", "path": path, "cwd": cwd}
+    elif (event in ("PostToolUse", "PostToolUseFailure") and tool == "Bash") or event == "Stop":
+        activity = {"kind": "refresh", "cwd": cwd}
+    if activity is not None:
+        params["activity"] = activity
+
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(0.5)
@@ -133,6 +152,7 @@ except Exception:
     pass
 raise SystemExit(0)
 PY
+)" || true
 `
 }
 

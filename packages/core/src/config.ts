@@ -312,6 +312,9 @@ export const DEFAULT_PREFIX_BINDINGS: Readonly<Record<string, string>> = {
   // the shell behind it wanted.
   f: 'client.search',
   d: 'client.detach',
+  // `D` for diff. Uppercase because lowercase `d` is detach, as in tmux, and the two
+  // are not close enough in meaning for a near-miss to be forgiving.
+  D: 'client.changes',
   q: 'client.quit',
   r: 'client.repaint',
   R: 'client.reload-config',

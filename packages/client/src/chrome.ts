@@ -62,6 +62,8 @@ export interface HitRegions {
     readonly newEnd: number
     readonly menuStart: number
     readonly files: { readonly x: number; readonly end: number } | null
+    /** `± changes`, next to `files`. Null on the same terms: too narrow to hold it. */
+    readonly changes: { readonly x: number; readonly end: number } | null
   } | null
   /** The `«` that collapses the sidebar. */
   collapse: { readonly x: number; readonly end: number; readonly y: number } | null
@@ -83,6 +85,26 @@ export interface HitRegions {
   }>
   /** Row -> the agent pane to jump to, for the sidebar's agents section. */
   readonly agentRows: Map<number, { readonly paneId: string; readonly workspaceId: string }>
+  /**
+   * The `*` on a workspace's branch line, which already means *uncommitted work here*.
+   *
+   * A target rather than a new button: at thirty columns the cheapest affordance is the
+   * one that costs no columns, and this mark is already drawn and already means the
+   * thing the Changes overlay shows.
+   */
+  readonly dirtySpans: Array<{
+    readonly x: number
+    readonly end: number
+    readonly y: number
+    readonly workspaceId: string
+  }>
+  /** The `±` revealed on a hovered agent row: review what that agent changed. */
+  readonly agentChangeSpans: Array<{
+    readonly x: number
+    readonly end: number
+    readonly y: number
+    readonly paneId: string
+  }>
   /** Column range on a workspace row that closes it. */
   readonly workspaceCloseSpans: Array<{
     readonly x: number
@@ -116,6 +138,8 @@ export function emptyHitRegions(): HitRegions {
     collapse: null,
     grips: [],
     agentRows: new Map(),
+    dirtySpans: [],
+    agentChangeSpans: [],
     workspaceCloseSpans: [],
     newTabSpan: null,
     paneButtons: []
@@ -414,7 +438,7 @@ export function renderSidebar(
   // it — including when the list above it is empty and that blank is the card's floor.
   y = blankRow(strip, y, palette.card)
   y = actionRow(strip, y)
-  y = agentsCard(strip, state, y)
+  y = agentsCard(strip, state, y, hoverEnabled)
 
   // The `«` sits at the bottom, on the edge it collapses towards, where herdr puts it:
   // out of the way of the list. It and the grip both read the style already on the cell,
@@ -546,7 +570,15 @@ function workspaceEntry(
     const row = hovered(palette.card, y === strip.hoverRow)
     paintRow(strip, y, row)
     markRow(y, row)
-    put(strip, BODY_X, y, truncate(line, bodyRoom(strip)), weight(row, ATTR_DIM))
+    const shown = truncate(line, bodyRoom(strip))
+    put(strip, BODY_X, y, shown, weight(row, ATTR_DIM))
+    // The mark is already drawn and already means *there is uncommitted work here*, so
+    // it is registered as a target rather than given a button of its own. Only when it
+    // survived truncation: a span over a column holding something else is a mis-click.
+    if (summary.dirty && shown.endsWith(DIRTY_MARK)) {
+      const at = strip.area.x + BODY_X + shown.length - DIRTY_MARK.length
+      hits.dirtySpans.push({ x: at, end: at + DIRTY_MARK.length, y, workspaceId: workspace.workspaceId })
+    }
     // The same click target as the name above it: two rows, one workspace.
     hits.workspaceRows.set(y, workspace.workspaceId)
     y += 1
@@ -599,16 +631,44 @@ function actionRow(strip: Strip, y: number): number {
 
   // Centred in what is left between the two, and only if it fits whole: a half-drawn
   // label is a target whose edge nobody can find.
+  //
+  // Two buttons now, and the ladder is ordered so that **adding one never takes a word
+  // off the other**. Phase 12 fixed 22 columns as the width where `▤ files` still reads
+  // as a word, and a narrow form of `±` that cost `files` its label would quietly undo
+  // that decision to buy a button nobody asked for there. So `changes` gives up its
+  // word first, then disappears entirely, and only then does `files` narrow to a glyph.
   const gapStart = Math.min(strip.width, add.length + 1)
   const gapEnd = menuColumn - 1
-  const label = gapEnd - gapStart >= FILES_LABEL.length ? FILES_LABEL : FILES_GLYPH
+  const room = gapEnd - gapStart
+  const ladder: string[][] = [
+    [FILES_LABEL, CHANGES_LABEL],
+    [FILES_LABEL, CHANGES_GLYPH],
+    [FILES_LABEL],
+    [FILES_GLYPH, CHANGES_GLYPH],
+    [FILES_GLYPH]
+  ]
+  const pair = ladder.find((option) => room >= option.join(' ').length) ?? [FILES_GLYPH]
+  const drawn = pair.join(' ')
   let files: { x: number; end: number } | null = null
-  if (gapEnd - gapStart >= label.length) {
-    const column = gapStart + Math.floor((gapEnd - gapStart - label.length) / 2)
-    put(strip, column, y, label, dim)
-    files = { x: strip.area.x + column, end: strip.area.x + column + label.length }
+  let changes: { x: number; end: number } | null = null
+  if (room >= drawn.length) {
+    const column = gapStart + Math.floor((room - drawn.length) / 2)
+    put(strip, column, y, drawn, dim)
+    const first = pair[0] as string
+    files = { x: strip.area.x + column, end: strip.area.x + column + first.length }
+    const second = pair[1]
+    if (second !== undefined) {
+      const at = strip.area.x + column + first.length + 1
+      changes = { x: at, end: at + second.length }
+    }
   }
-  hits.actionRow = { row: y, newEnd: strip.area.x + add.length, menuStart: strip.area.x + menuColumn, files }
+  hits.actionRow = {
+    row: y,
+    newEnd: strip.area.x + add.length,
+    menuStart: strip.area.x + menuColumn,
+    files,
+    changes
+  }
   // Kept so a click anywhere else on the row still makes a workspace, which is the more
   // likely intent on a row whose left half says `new`.
   hits.newWorkspaceRow = y
@@ -624,7 +684,7 @@ function actionRow(strip: Strip, y: number): number {
  * Worst state first, so a blocked agent is at the top of the list rather than wherever
  * it happens to live.
  */
-function agentsCard(strip: Strip, state: SessionStateSnapshot, startY: number): number {
+function agentsCard(strip: Strip, state: SessionStateSnapshot, startY: number, hoverEnabled: boolean): number {
   const entries = agentEntries(state)
   if (entries.length === 0) return startY
   // The gutter between the two cards, in the sidebar's own background rather than in
@@ -637,7 +697,7 @@ function agentsCard(strip: Strip, state: SessionStateSnapshot, startY: number): 
     if (y >= strip.limit) break
     if (!first) y = blankRow(strip, y, strip.palette.card)
     first = false
-    y = agentEntry(strip, state, entry, y)
+    y = agentEntry(strip, state, entry, y, hoverEnabled)
   }
   return y
 }
@@ -655,7 +715,13 @@ function agentsCard(strip: Strip, state: SessionStateSnapshot, startY: number): 
  * thirty columns, and it was never an identity: two agents in one workspace are two
  * adjacent rows that differ only in order, and each still clicks through to its own pane.
  */
-function agentEntry(strip: Strip, state: SessionStateSnapshot, entry: AgentEntry, startY: number): number {
+function agentEntry(
+  strip: Strip,
+  state: SessionStateSnapshot,
+  entry: AgentEntry,
+  startY: number,
+  hoverEnabled: boolean
+): number {
   const { palette, hits } = strip
   let y = startY
   const hue = strip.hues.get(entry.workspaceId) ?? palette.sidebar.fg
@@ -663,8 +729,29 @@ function agentEntry(strip: Strip, state: SessionStateSnapshot, entry: AgentEntry
   const base = hovered(palette.card, y === strip.hoverRow)
   paintRow(strip, y, base)
   put(strip, DOT_X, y, agentGlyph(entry.status) ?? '?', tint(base, hue))
+
+  // `±` — review what this agent changed — on the hovered row only, exactly as the
+  // workspace rows reveal their pane count and `x`. That doc comment's constraint holds
+  // here too: *there is no column for a third fact at thirty columns*. On a row nobody
+  // is pointing at there is no third fact, so nothing is given up; and when
+  // `mouse-hover` is off the chrome falls back to the row the keyboard is on, which is
+  // the same fallback and the same reason.
+  // With `mouse-hover` off there is no hovered row at all, so the chrome falls back to
+  // the agent in the focused pane — the same shape the workspace rows use, where the
+  // fallback is the active workspace. Without it the button would be unreachable for
+  // anyone who has turned hover off, which is the configuration it most needs to work in.
+  const chromeHere = hoverEnabled ? y === strip.hoverRow : entry.paneId === state.focusedPaneId
+  let reserved = 0
+  if (chromeHere) {
+    reserved = CHANGES_GLYPH.length + 1
+    const column = strip.width - RIGHT_PAD - CHANGES_GLYPH.length
+    put(strip, column, y, CHANGES_GLYPH, weight(base, ATTR_DIM))
+    const at = strip.area.x + column
+    hits.agentChangeSpans.push({ x: at, end: at + CHANGES_GLYPH.length, y, paneId: entry.paneId })
+  }
+
   const place = workspaceNameOf(state, entry.workspaceId, entry.workspaceNumber)
-  put(strip, BODY_X, y, truncate(place, bodyRoom(strip)), weight(tint(base, hue), ATTR_BOLD))
+  put(strip, BODY_X, y, truncate(place, bodyRoom(strip, reserved)), weight(tint(base, hue), ATTR_BOLD))
   hits.agentRows.set(y, { paneId: entry.paneId, workspaceId: entry.workspaceId })
   y += 1
   if (y >= strip.limit) return y
@@ -694,6 +781,18 @@ function agentEntry(strip: Strip, state: SessionStateSnapshot, entry: AgentEntry
  */
 const FILES_GLYPH = '▤'
 const FILES_LABEL = '▤ files'
+
+/**
+ * The Changes button, and why it is not from `▤`'s block.
+ *
+ * `icons.ts` opens with the reason this is not a free choice: a glyph whose width the
+ * terminal disagrees about shifts every column after it *on that row*, and takes the
+ * mouse hit regions with it — a mis-click that looks like a rendering glitch. `±` is
+ * U+00B1, Latin-1 Supplement, and unambiguously **Narrow**. `▤` is East-Asian
+ * *Ambiguous* and was accepted anyway; one such gamble in this strip is enough.
+ */
+const CHANGES_GLYPH = '±'
+const CHANGES_LABEL = '± changes'
 
 /** A grip on a vertical edge, and on a horizontal one. */
 export const GRIP_VERTICAL = '⋮'

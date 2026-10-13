@@ -97,7 +97,10 @@ describe('splitting', () => {
     const tui = await startShell()
     tui.command('"')
     await tui.waitForText('2 panes')
-    const screen = await tui.screen()
+    const screen = await tui.waitForScreen(
+      (screen) => screen.split('\n').filter((line, i) => i > 0 && i < tui.size.rows - 2 && /^[├└┌│].*[─]{10}/u.test(line)).length >= 2,
+      'the top/bottom split never rendered its divider'
+    )
     const lines = screen.split('\n')
     // A horizontal divider inside the screen: a row of box-drawing between the two panes.
     const dividers = lines.filter((l, i) => i > 0 && i < tui.size.rows - 2 && /^[├└┌│].*[─]{10}/u.test(l))

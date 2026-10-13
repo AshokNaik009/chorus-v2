@@ -258,7 +258,9 @@ describe('the panel container', () => {
     const zones = activityZones(area)
     // Phase 9 added the preview as a fourth view, which is the shape the container's
     // contract predicted a fourth view would take: a chip, a field, and one arm.
-    expect(zones.map((zone) => zone.id)).toEqual(['explorer', 'search', 'scm', 'preview'])
+    // Phase 13's `diff` chip is the first that is *not* a view — it opens an overlay —
+    // which is why `ChipId` is wider than `ViewId`.
+    expect(zones.map((zone) => zone.id)).toEqual(['explorer', 'search', 'scm', 'preview', 'changes'])
     panels.handleClick(area.y, zones[2]?.x as number, area)
     expect(panels.active()).toBe('scm')
     panels.handleClick(area.y, zones[1]?.x as number, area)
@@ -271,11 +273,24 @@ describe('the panel container', () => {
   // chip of its own — a chip that switched to the half already on screen would do
   // nothing and read as broken.
   it('drops the git chip in unified layout, where it is not a view', () => {
+    // `changes` survives: that argument is about a chip switching to a half-view
+    // already on screen, and `changes` switches to nothing — it opens an overlay.
     expect(activityZones(area, 'unified').map((zone) => zone.id)).toEqual([
       'explorer',
       'search',
-      'preview'
+      'preview',
+      'changes'
     ])
+  })
+
+  it('the changes chip opens the overlay rather than switching the view', () => {
+    const panels = new SidebarPanels('scm')
+    const zones = activityZones(area)
+    const chip = zones.find((zone) => zone.id === 'changes')
+    expect(chip).toBeDefined()
+    expect(panels.handleClick(area.y, chip?.x as number, area)).toEqual({ view: 'changes', outcome: 'open' })
+    // The dock is left exactly as it was: the overlay is drawn over it, not instead of it.
+    expect(panels.active()).toBe('scm')
   })
 
   it('a click below the activity bar is the view’s, not the bar’s', () => {
