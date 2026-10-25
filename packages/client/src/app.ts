@@ -137,6 +137,7 @@ import { SettingsDialog, describeChord, settingsArea, type SettingsOutcome } fro
 import { buildKeymap, isPrefix, type Keymap } from './keymap.js'
 import {
   emptyHitRegions,
+  GRIP_VERTICAL,
   paletteOf,
   renderSidebar,
   RAIL_WIDTH,
@@ -255,6 +256,7 @@ export class TuiApp {
   private sidebarWidthOverride: number | null = null
   /** True while the sidebar edge is being dragged. */
   private draggingSidebar = false
+  private draggingPreview: SidebarPanels | null = null
   private prefixArmed = false
   /** Where the pointer is, or -1/-1. Only ever set when hover is enabled. */
   private hoverRow = -1
@@ -492,7 +494,10 @@ export class TuiApp {
       if (!state.panes.some((pane) => pane.paneId === id)) {
         panels.browser.dispose()
         this.panePanels.delete(id)
-        if (this.panels === panels) this.panels = null
+        if (this.panels === panels) {
+          this.cancelDockDrag()
+          this.panels = null
+        }
       }
     }
     if (previous.focusedPaneId !== state.focusedPaneId && this.panels !== null &&
@@ -685,6 +690,12 @@ export class TuiApp {
    */
   private borderChars(): BorderChars {
     return this.config.ui.paneBorders === 'plain' ? PLAIN_BORDER : ROUND_BORDER
+  }
+
+  private panelArea(): Rect | null {
+    const area = this.sidebarArea()
+    if (area === null || this.panels?.active() !== 'preview') return area
+    return { ...area, x: area.x + (this.dockRight() ? 1 : 0), width: area.width - 1 }
   }
 
   private sidebarArea(): Rect | null {
@@ -942,6 +953,7 @@ export class TuiApp {
   }
 
   private async handleKey(key: Key, bytes: Uint8Array): Promise<void> {
+    this.cancelDockDrag()
     // A prompt owns the keyboard while it is open: the point of typing a name is that
     // the letters do not also run commands or reach the pane.
     if (this.prompt !== null) {
@@ -1126,9 +1138,10 @@ export class TuiApp {
       await this.applyBranchOutcome(this.branches.handleClick(mouse.column, mouse.row, area))
       return
     }
-    if (await this.handlePanelClick(mouse)) return
     if (this.handleSidebarDrag(mouse)) return
+    if (this.handlePreviewDrag(mouse)) return
     if (await this.handleDivider(mouse)) return
+    if (await this.handlePanelClick(mouse)) return
     if (this.trackHover(mouse)) return
     if (await this.handlePaneButton(mouse)) return
     if (await this.handleStatusClick(mouse)) return
@@ -1513,9 +1526,11 @@ export class TuiApp {
         // Dragging the inner edge: from the left it is the column itself, from the
         // right it is the distance back to the screen's edge. Without this the handle
         // on a right-docked panel widens it when you drag inward.
-        this.sidebarWidthOverride = this.dockRight()
+        const width = this.dockRight()
           ? Math.max(MIN_SIDEBAR_WIDTH, this.cols - mouse.column)
           : Math.max(MIN_SIDEBAR_WIDTH, mouse.column + 1)
+        if (this.panels?.active() === 'preview') this.panels.resizePreviewWidth(this.cols, width)
+        else this.sidebarWidthOverride = width
         this.invalidate()
         return true
       }
@@ -1528,13 +1543,54 @@ export class TuiApp {
       this.draggingSidebar = false
       return mouse.kind === 'up'
     }
-    if (mouse.kind !== 'down') return false
+    if (mouse.kind !== 'down' || mouse.button !== 'left') return false
+    const sidebar = this.sidebarArea()
+    if (sidebar !== null && this.panels?.active() === 'preview' && mouse.row > sidebar.y && mouse.row < sidebar.y + sidebar.height) {
+      const edge = this.dockRight() ? sidebar.x : sidebar.x + sidebar.width - 1
+      if (mouse.column === edge || mouse.column === edge + (this.dockRight() ? -1 : 1)) {
+        this.draggingSidebar = true
+        this.dockFocused = true
+        return true
+      }
+    }
     // A grip, not the whole edge. See `HitRegions.grips`.
     const grip = this.hits.grips.find(
       (entry) => entry.kind === 'sidebar' && entry.y === mouse.row && Math.abs(entry.x - mouse.column) <= 1
     )
     if (grip === undefined) return false
     this.draggingSidebar = true
+    return true
+  }
+
+  private cancelDockDrag(): void {
+    this.draggingSidebar = false
+    this.draggingPreview = null
+  }
+
+  private handlePreviewDrag(mouse: MouseEvent): boolean {
+    const panels = this.panels
+    const area = this.panelArea()
+    if (panels === null || area === null || panels.active() !== 'preview') {
+      this.draggingPreview = null
+      return false
+    }
+    const body = panels.bodyArea(area)
+    const { tree } = panels.previewAreas(body)
+    if (this.draggingPreview !== panels || tree === null) this.draggingPreview = null
+    if (this.draggingPreview !== null) {
+      if (mouse.kind === 'drag') {
+        panels.resizePreviewTree(mouse.column - body.x, body)
+        this.requestRender()
+        return true
+      }
+      if (mouse.kind === 'move') return true
+      this.draggingPreview = null
+      return mouse.kind === 'up'
+    }
+    if (mouse.kind !== 'down' || mouse.button !== 'left' || tree === null ||
+        mouse.column !== tree.x + tree.width || mouse.row < tree.y || mouse.row >= tree.y + tree.height) return false
+    this.draggingPreview = panels
+    this.dockFocused = true
     return true
   }
 
@@ -1718,6 +1774,7 @@ export class TuiApp {
   }
 
   private async followBrowserPane(): Promise<void> {
+    this.cancelDockDrag()
     const paneId = this.state.focusedPaneId
     if (paneId === null || this.panels === null) return
     const view = this.panels.active() === 'preview' ? 'explorer' : this.panels.active()
@@ -2085,7 +2142,7 @@ export class TuiApp {
         return
       case 'refresh': {
         const path = panels.preview.path
-        if (path !== null) await panels.browser.read(path, panels.previewWidth(this.sidebarArea() ?? { x: 0, y: 0, width: 80, height: 24 }), true)
+        if (path !== null) await panels.browser.read(path, panels.previewWidth(this.panelArea() ?? { x: 0, y: 0, width: 80, height: 24 }), true)
         return
       }
       case 'close':
@@ -2117,7 +2174,7 @@ export class TuiApp {
       return
     }
     // The columns the *file* gets, not the dock's: with the tree beside it they differ.
-    const area = this.sidebarArea()
+    const area = this.panelArea()
     const width = area === null ? MIN_SIDEBAR_WIDTH : panels.previewWidth(area)
     this.requestRender()
     try {
@@ -2297,6 +2354,7 @@ export class TuiApp {
 
   /** Close the dock and give the keyboard back. */
   private closePanels(): void {
+    this.cancelDockDrag()
     // Remembered before the container goes, for `[sidebar] remember-view`. Kept even
     // when the setting is off: turning it on should not need a restart to work.
     this.lastView = this.panels?.active() ?? this.lastView
@@ -2392,7 +2450,7 @@ export class TuiApp {
    * underneath — the panel occupies the sidebar's columns and nothing is behind it.
    */
   private async handlePanelClick(mouse: MouseEvent): Promise<boolean> {
-    const sidebar = this.sidebarArea()
+    const sidebar = this.panelArea()
     const panels = this.panels
     if (sidebar === null || panels === null) return false
     if (!contains(sidebar, mouse.column, mouse.row)) return false
@@ -3316,6 +3374,7 @@ export class TuiApp {
 
   resize(cols: number, rows: number): void {
     if (cols === this.cols && rows === this.rows) return
+    this.cancelDockDrag()
     this.cols = Math.max(1, cols)
     this.rows = Math.max(1, rows)
     this.front.resize(this.cols, this.rows)
@@ -3419,9 +3478,15 @@ export class TuiApp {
       const sidebar = this.sidebarArea()
       if (sidebar !== null) {
         if (this.panels !== null) {
-          this.panels.browser.setVisible(true, this.panels.active() === 'preview' ? this.panels.previewWidth(sidebar) : 0)
+          const area = this.panelArea() ?? sidebar
+          this.panels.browser.setVisible(true, this.panels.active() === 'preview' ? this.panels.previewWidth(area) : 0)
           void this.panels.browser.restoreActivity()
-          this.panels.render(this.back, sidebar, this.palette, this.dockFocused)
+          this.panels.render(this.back, area, this.palette, this.dockFocused)
+          if (this.panels.active() === 'preview' && sidebar.height > 1) {
+            const edge = this.dockRight() ? sidebar.x : sidebar.x + sidebar.width - 1
+            this.back.fill({ x: edge, y: sidebar.y + 1, width: 1, height: sidebar.height - 1 }, '│', this.palette.idleBorder)
+            this.back.writeString(edge, sidebar.y + Math.floor(sidebar.height / 2), GRIP_VERTICAL, this.palette.idleBorder, edge + 1)
+          }
         } else if (this.sidebarMode === 'rail') {
           renderSidebarRail(this.back, sidebar, this.state, this.palette, this.hits, this.sidebarHoverRow())
         } else {

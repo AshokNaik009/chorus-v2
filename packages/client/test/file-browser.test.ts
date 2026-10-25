@@ -26,8 +26,8 @@ function folder(name: string): string {
   return dir
 }
 
-async function start(cwd: string): Promise<TuiHarness> {
-  tui = await TuiHarness.start({ cols: 160, rows: 30, cwd, command: '/bin/bash', args: ['--norc', '--noprofile'], config: '[sidebar]\npreview = true\n' })
+async function start(cwd: string, dock: 'left' | 'right' = 'left'): Promise<TuiHarness> {
+  tui = await TuiHarness.start({ cols: 160, rows: 30, cwd, command: '/bin/bash', args: ['--norc', '--noprofile'], config: `[sidebar]\npreview = true\ndock = "${dock}"\n` })
   await tui.waitForReady()
   ;({ client } = await DaemonClient.connect({ socketPath: tui.paths.socketPath, clientName: 'browser-test' }))
   tui.command('e')
@@ -36,7 +36,74 @@ async function start(cwd: string): Promise<TuiHarness> {
   return tui
 }
 
+const mouse = (button: number, column: number, row: number, release = false) =>
+  `\x1b[<${button};${column + 1};${row + 1}${release ? 'm' : 'M'}`
+
+function dockEdge(screen: string, dock: 'left' | 'right'): number {
+  const header = screen.split('\n')[1] ?? ''
+  return dock === 'left' ? header.indexOf('╭') - 1 : header.indexOf('╮') + 1
+}
+
+function treeEdge(screen: string): number {
+  return (screen.split('\n')[1] ?? '').indexOf('▸ src/a.ts') - 1
+}
+
 describe('the native browser in a real terminal', () => {
+  it.each(['left', 'right'] as const)('resizes the preview dock on the %s without changing the file', async (dock) => {
+    const harness = await start(folder('a.ts'), dock)
+    await harness.waitForText('a.ts')
+    harness.write('j\r')
+    const initial = await harness.waitForText('export const original = 1')
+    const edge = dockEdge(initial, dock)
+    expect(edge).toBeGreaterThan(0)
+    const target = edge + (dock === 'left' ? 20 : -20)
+    harness.write(mouse(0, edge, 12))
+    harness.write(mouse(35, target, 12))
+    harness.write(mouse(32, target, 12))
+    harness.write(mouse(0, target, 12, true))
+    const widened = await harness.waitForScreen((screen) => dockEdge(screen, dock) === target, 'preview dock did not widen', 3_000)
+    expect(widened).toContain('export const original = 1')
+    const smaller = edge + (dock === 'left' ? -10 : 10)
+    harness.write(mouse(0, target, 12))
+    harness.write(mouse(32, smaller, 12))
+    harness.write(mouse(0, smaller, 12, true))
+    await harness.waitForScreen((screen) => dockEdge(screen, dock) === smaller, 'preview dock did not shrink')
+    harness.write(mouse(35, target, 12))
+    harness.write(mouse(32, target, 12))
+    harness.write('w')
+    const released = await harness.waitForText('wrap')
+    expect(dockEdge(released, dock)).toBe(smaller)
+    harness.write(mouse(0, smaller, 12))
+    harness.write('1')
+    await harness.waitForText('h/l fold')
+    harness.write(mouse(32, target, 12))
+    harness.write(mouse(0, target, 12, true))
+    harness.write('a')
+    const cancelled = await harness.waitForText('follow:on')
+    expect(dockEdge(cancelled, dock)).toBe(dock === 'left' ? 33 : 126)
+  })
+
+  it.each(['left', 'right'] as const)('drags the tree/preview divider on the %s and keeps capture outside the dock', async (dock) => {
+    const harness = await start(folder('a.ts'), dock)
+    await harness.waitForText('a.ts')
+    harness.write('j\r')
+    const initial = await harness.waitForText('export const original = 1')
+    const edge = treeEdge(initial)
+    const outer = dockEdge(initial, dock)
+    expect(edge).toBeGreaterThan(0)
+    harness.write(mouse(0, edge, 5))
+    harness.write(mouse(32, dock === 'left' ? 130 : 5, 5))
+    harness.write(mouse(35, edge - 5, 5))
+    harness.write(mouse(32, edge - 5, 5))
+    harness.write(mouse(0, edge - 5, 5, true))
+    const resized = await harness.waitForScreen((screen) => treeEdge(screen) === edge - 5, 'tree/preview divider did not move', 3_000)
+    expect(dockEdge(resized, dock)).toBe(outer)
+    expect(resized).toContain('export const original = 1')
+    harness.write(mouse(32, edge + 5, 5))
+    harness.write('w')
+    expect(treeEdge(await harness.waitForText('wrap'))).toBe(edge - 5)
+  })
+
   it('stages in the pinned tree even when the same shell changes repository', async () => {
     const a = folder('a.ts')
     const b = folder('a.ts')

@@ -24,14 +24,22 @@ hooks even when they share a matcher group with an older Chorus hook.
   when the shell changes directory; reloading `sidebar.follow-pane` affects open docks.
 - `r` refreshes; in the preview it can retry a failed read. `w` wraps, `z` zooms, and
   `Tab` switches tree/preview focus where both are visible. Enter opens `$PAGER`.
+- Drag either preview divider: tree/file adjusts the internal split; file/terminal
+  adjusts the dock width, including beyond the automatic half-screen width. Both
+  work docked left or right. Manual sizes are per-pane, client-local, and survive
+  view switches and zoom toggles. At least 24 columns remain for the terminal.
+  Resize capture runs before panel clicks and ends on release, keyboard input,
+  pane switches, dock closure, or terminal resize. A client detach/reattach loads
+  this change without restarting the daemon or the agents.
 - Hidden docks do no scheduled filesystem work; stale activity does not move selection
   when reopening. Pane removal disposes timers and invalidates pending requests.
 - The known top/bottom split test race described below now waits for the actual
   divider, retaining the same geometry assertion instead of assuming the pane-count
   status means the layout has finished rendering.
 
-Verification: `pnpm test` passes **94 files / 1,648 tests**, including real PTY clients,
-real daemon sockets, multiple repositories, pin/follow reloads, and hook installation.
+Verification: `pnpm test` passes **94 files / 1,655 tests**, including real PTY clients,
+real daemon sockets, multiple repositories, pin/follow reloads, hook installation,
+and preview divider drags on both dock sides with release and cancellation checks.
 `pnpm build`, `pnpm typecheck`, and `git diff --check` also pass. Run the full suite
 alone, as noted in the getting-started commands below.
 

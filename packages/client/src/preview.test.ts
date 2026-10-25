@@ -253,6 +253,50 @@ describe('what the preview can ask for', () => {
   })
 })
 
+describe('preview resizing', () => {
+  it('honours a dragged width instead of forcing the automatic half-screen width', () => {
+    const panels = new SidebarPanels('preview')
+    panels.resizePreviewWidth(160, 110)
+    expect(panels.preferredWidth(160, 30)).toBe(110)
+    panels.resizePreviewWidth(160, 60)
+    expect(panels.preferredWidth(160, 30)).toBe(60)
+    panels.show('explorer')
+    expect(panels.preferredWidth(160, 30)).toBe(34)
+    panels.show('preview')
+    expect(panels.preferredWidth(160, 30)).toBe(60)
+  })
+
+  it('keeps space for the terminal and restores the manual width after zoom', () => {
+    const panels = new SidebarPanels('preview')
+    panels.resizePreviewWidth(160, 110)
+    panels.handleKey(key('char', 'z'))
+    expect(panels.preferredWidth(160, 30)).toBe(136)
+    panels.handleKey(key('char', 'z'))
+    expect(panels.preferredWidth(160, 30)).toBe(110)
+    expect(panels.preferredWidth(80, 30)).toBe(56)
+    expect(panels.preferredWidth(160, 30)).toBe(110)
+    panels.resizePreviewWidth(160, 500)
+    expect(panels.preferredWidth(160, 30)).toBe(136)
+    panels.resizePreviewWidth(160, -5)
+    expect(panels.preferredWidth(160, 30)).toBe(34)
+  })
+
+  it('resizes the tree independently and clamps both reading areas', () => {
+    const panels = new SidebarPanels('preview')
+    const body = { x: 50, y: 1, width: 100, height: 24 }
+    panels.resizePreviewTree(40, body)
+    expect(panels.previewAreas(body)).toEqual({
+      tree: { ...body, width: 40 }, preview: { ...body, x: 91, width: 59 }
+    })
+    panels.resizePreviewTree(-20, body)
+    expect(panels.previewAreas(body).tree?.width).toBe(20)
+    panels.resizePreviewTree(500, body)
+    expect(panels.previewAreas(body).preview.width).toBe(42)
+    expect(panels.previewAreas({ ...body, width: 50 }).tree).toBeNull()
+    expect(panels.previewAreas({ ...body, width: 70 }).preview.width).toBe(42)
+  })
+})
+
 describe('the container routes the preview', () => {
   it('keeps a useful tree beside a preview at 160 columns and offers zoom', () => {
     const panels = new SidebarPanels('preview')

@@ -38,7 +38,7 @@
 
 import { ScreenBuffer, truncate, type Rect } from '@leap-chorus/tui'
 import type { SidebarConfig } from '@leap-chorus/core'
-import type { Palette } from './chrome.js'
+import { GRIP_VERTICAL, type Palette } from './chrome.js'
 import { EXPLORER_HINT, type ExplorerOutcome } from './explorer.js'
 import { FileBrowser } from './file-browser.js'
 import { iconTheme, type IconTheme } from './icons.js'
@@ -189,6 +189,8 @@ export class SidebarPanels {
 
   private view: ViewId
   private zoomPreview = false
+  private previewDockWidth: number | null = null
+  private previewTreeWidth: number | null = null
   private previewFocus: 'tree' | 'file' = 'file'
   private settings: PanelSettings = DEFAULT_SETTINGS
   private icons: IconTheme = iconTheme('ascii')
@@ -267,8 +269,18 @@ export class SidebarPanels {
     const normal = Math.min(Math.max(configured, this.minWidth()), Math.max(this.minWidth(), Math.floor(cols / 3)))
     if (this.view !== 'preview') return normal
     if (this.zoomPreview) return Math.max(normal, cols - 24)
+    if (this.previewDockWidth !== null) return Math.max(this.minWidth(), Math.min(this.previewDockWidth, cols - 24))
     const ideal = MIN_SCM_WIDTH + 1 + READABLE_WIDTH
     return Math.max(normal, Math.min(Math.floor(cols / 2), ideal))
+  }
+
+  resizePreviewWidth(cols: number, width: number): void {
+    this.previewDockWidth = Math.max(this.minWidth(), Math.min(width, cols - 24))
+    this.zoomPreview = false
+  }
+
+  resizePreviewTree(width: number, body: Rect): void {
+    this.previewTreeWidth = Math.max(20, Math.min(width, body.width - 1 - TREE_BESIDE_PREVIEW_MIN))
   }
 
   /**
@@ -281,8 +293,9 @@ export class SidebarPanels {
    * gesture the Explorer's click already produced and had nowhere to put.
    */
   previewAreas(body: Rect): { tree: Rect | null; preview: Rect } {
-    const treeWidth = Math.max(20, Math.min(28, Math.floor(body.width / 3)))
-    if (body.width < treeWidth + 1 + TREE_BESIDE_PREVIEW_MIN) return { tree: null, preview: body }
+    const available = body.width - 1 - TREE_BESIDE_PREVIEW_MIN
+    if (available < 20) return { tree: null, preview: body }
+    const treeWidth = Math.min(available, this.previewTreeWidth ?? Math.max(20, Math.min(28, Math.floor(body.width / 3))))
     return {
       tree: { x: body.x, y: body.y, width: treeWidth, height: body.height },
       preview: {
@@ -645,6 +658,7 @@ export class SidebarPanels {
         if (tree !== null) {
           this.explorer.renderInto(buffer, tree, palette)
           buffer.fill({ x: preview.x - 1, y: body.y, width: 1, height: body.height }, '│', palette.idleBorder)
+          buffer.writeString(preview.x - 1, body.y + Math.floor(body.height / 2), GRIP_VERTICAL, palette.idleBorder, preview.x)
         }
         this.preview.renderInto(buffer, preview, palette, focused && (tree === null || this.previewFocus === 'file'))
         return
